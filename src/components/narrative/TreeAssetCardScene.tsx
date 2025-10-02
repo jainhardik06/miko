@@ -4,6 +4,7 @@ import { useRef } from 'react';
 import { useFrame } from '@react-three/fiber';
 import * as THREE from 'three';
 import { EffectComposer, Bloom } from '@react-three/postprocessing';
+import { ACCENT_BASE } from '../themeColors';
 
 /**
  * TreeAssetCardScene
@@ -25,7 +26,7 @@ function TreeAssetCardScene(){
     <>
       <color attach="background" args={["#000000"]} />
       <ambientLight intensity={0.45} />
-      <spotLight position={[6,8,6]} intensity={1200} angle={0.6} distance={40} penumbra={0.8} color={'#35ffc7'} />
+  <spotLight position={[6,8,6]} intensity={1200} angle={0.6} distance={40} penumbra={0.8} color={ACCENT_BASE} />
       <IdleSway amp={0.08} speed={0.35}>
         <HoloCard />
       </IdleSway>
@@ -66,7 +67,7 @@ function HoloCard(){
           metalness={0.1}
           clearcoat={0.8}
           clearcoatRoughness={0.25}
-          attenuationColor={'#19ffc0'}
+          attenuationColor={ACCENT_BASE}
           attenuationDistance={3.5}
           transparent
           opacity={0.4}
@@ -76,7 +77,7 @@ function HoloCard(){
       {/* Rim / outline */}
       <mesh scale={[3.25,4.45,0.08]}> 
         <boxGeometry args={[1,1,0.02,1,1,1]} />
-        <meshBasicMaterial ref={rimMat} color={'#19ffc0'} wireframe transparent opacity={0.8} blending={THREE.AdditiveBlending} />
+  <meshBasicMaterial ref={rimMat} color={ACCENT_BASE} wireframe transparent opacity={0.8} blending={THREE.AdditiveBlending} />
       </mesh>
       <HoloTree />
     </group>
@@ -99,7 +100,7 @@ function HoloTree(){
     positions[i*3+2] = Math.sin(theta)*r*0.6;
   }
   leafGeom.setAttribute('position', new THREE.BufferAttribute(positions,3));
-  const leafMat = new THREE.PointsMaterial({ size:0.04, color:'#19ffc0', transparent:true, opacity:0.9, blending:THREE.AdditiveBlending });
+  const leafMat = new THREE.PointsMaterial({ size:0.04, color:ACCENT_BASE, transparent:true, opacity:0.9, blending:THREE.AdditiveBlending });
   useFrame(({ clock }) => {
     const t = clock.getElapsedTime();
     if(trunk.current){
@@ -113,12 +114,12 @@ function HoloTree(){
     <group position={[0,-1.6,0]}>
       <mesh ref={trunk} position={[0,0,0]}>
         <cylinderGeometry args={[0.18,0.28,1.6, 12]} />
-        <meshStandardMaterial color={'#19ffc0'} emissive={'#19ffc0'} emissiveIntensity={0.8} roughness={0.4} metalness={0.15} />
+  <meshStandardMaterial color={ACCENT_BASE} emissive={ACCENT_BASE} emissiveIntensity={0.8} roughness={0.4} metalness={0.15} />
       </mesh>
       <points ref={leaves} geometry={leafGeom} material={leafMat} />
       <mesh position={[0,1.42,0]}>
         <octahedronGeometry args={[0.35,0]} />
-        <meshStandardMaterial color={'#19ffc0'} emissive={'#19ffc0'} emissiveIntensity={1.2} roughness={0.25} metalness={0.2} />
+  <meshStandardMaterial color={ACCENT_BASE} emissive={ACCENT_BASE} emissiveIntensity={1.2} roughness={0.25} metalness={0.2} />
       </mesh>
     </group>
   );

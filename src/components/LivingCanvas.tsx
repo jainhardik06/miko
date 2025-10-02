@@ -10,6 +10,7 @@
 import { Canvas, useFrame, useThree } from '@react-three/fiber';
 import { EffectComposer, Bloom } from '@react-three/postprocessing';
 import * as THREE from 'three';
+import { ACCENT_BASE } from './themeColors';
 import { useRef, useEffect, useState, useCallback } from 'react';
 
 interface LivingCanvasProps {
@@ -89,7 +90,7 @@ function Seed({ act1 }: { act1: number }) {
   return (
     <mesh ref={ref}>
       <sphereGeometry args={[0.5, 48, 48]} />
-      <meshStandardMaterial ref={mat} color="#16e4b1" emissive="#16e4b1" emissiveIntensity={0.8} roughness={0.35} metalness={0.05} transparent opacity={0.1} />
+  <meshStandardMaterial ref={mat} color={ACCENT_BASE} emissive={ACCENT_BASE} emissiveIntensity={0.8} roughness={0.35} metalness={0.05} transparent opacity={0.1} />
     </mesh>
   );
 }
@@ -150,7 +151,7 @@ function Tree({ act2, act3 }: { act2: number; act3: number }) {
     <group position={[0,-0.5,0]}>
       <mesh ref={trunk} position={[0,1.2,0]}>
         <cylinderGeometry args={[0.15,0.28,2.4, 32, 1, true]} />
-        <meshStandardMaterial color="#19f5c3" emissive="#19f5c3" transparent opacity={0.1} roughness={0.2} metalness={0.4} />
+  <meshStandardMaterial color={ACCENT_BASE} emissive={ACCENT_BASE} transparent opacity={0.1} roughness={0.2} metalness={0.4} />
       </mesh>
       <mesh ref={crystal} position={[0,2.4,0]}>
         <icosahedronGeometry args={[0.5,0]} />
@@ -316,13 +317,13 @@ export default function LivingCanvas({ sectionIds }: LivingCanvasProps) {
   <InvalidateBridge />
       <fog attach="fog" args={["#030609", 6, 26]} />
       <ambientLight intensity={0.5} />
-      <pointLight position={[2,3,4]} intensity={1.8} color="#16e4b1" />
+  <pointLight position={[2,3,4]} intensity={1.8} color={ACCENT_BASE} />
       <spotLight
         position={[0,8,6]}
         angle={0.7}
         penumbra={0.9}
         intensity={2.5}
-        color="#19f5c3"
+  color={ACCENT_BASE}
         distance={40}
         decay={2}
       />

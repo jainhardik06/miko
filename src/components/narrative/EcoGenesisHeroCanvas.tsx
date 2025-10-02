@@ -1,6 +1,9 @@
 "use client";
 import { Canvas, useFrame, useThree } from '@react-three/fiber';
+import { useTheme } from '../ThemeProvider';
+import { SceneBackground } from '../SceneBackground';
 import { EffectComposer, Bloom } from '@react-three/postprocessing';
+import { ACCENT_BASE, ACCENT_AMBER, EMISSIVE_INTENSITY, BLOOM_INTENSITY, pick } from '../themeColors';
 import * as THREE from 'three';
 import { useMemo, useRef, useEffect, forwardRef } from 'react';
 
@@ -38,15 +41,16 @@ function Core(){
     }
   if(lattice.current){ lattice.current.rotation.y -= dt * 0.07; lattice.current.rotation.x += dt * 0.05; }
   });
+  // Emissive intensity will be overridden externally by theme logic in parent if desired.
   return (
     <group>
       <mesh ref={shell} position={[0,2,0]}>
         <icosahedronGeometry args={[1.9,1]} />
-        <meshPhysicalMaterial transmission={0.95} thickness={0.6} roughness={0.15} metalness={0.1} clearcoat={0.6} clearcoatRoughness={0.2} attenuationColor={'#19ffc0'} attenuationDistance={5} transparent opacity={0.9} color="#072b24" />
+        <meshPhysicalMaterial transmission={0.95} thickness={0.6} roughness={0.15} metalness={0.18} clearcoat={0.7} clearcoatRoughness={0.25} attenuationColor={ACCENT_BASE} attenuationDistance={5} transparent opacity={0.92} color="#072b24" />
       </mesh>
       <mesh ref={crystal} position={[0,2,0]}>
         <icosahedronGeometry args={[1.25,0]} />
-        <meshStandardMaterial emissive={'#19ffc0'} emissiveIntensity={1.3} color={'#19ffc0'} metalness={0.55} roughness={0.25} />
+        <meshStandardMaterial emissive={ACCENT_BASE} emissiveIntensity={EMISSIVE_INTENSITY.hero.dark} color={ACCENT_BASE} metalness={0.72} roughness={0.22} />
       </mesh>
       <Lattice position={[0,2,0]} ref={lattice as any} />
     </group>
@@ -61,7 +65,7 @@ const Lattice = forwardRef<THREE.LineSegments, { position:[number,number,number]
   }, []);
   return (
     <lineSegments ref={ref} geometry={geo} position={position as any}>
-      <lineBasicMaterial color={'#19ffc0'} linewidth={1} transparent opacity={0.35} />
+  <lineBasicMaterial color={ACCENT_BASE} linewidth={1} transparent opacity={0.35} />
     </lineSegments>
   );
 });
@@ -85,7 +89,7 @@ function OrbitOracles(){
       {orbs.map((o,i)=>(
         <mesh key={i} scale={0.32}>
           <icosahedronGeometry args={[1,0]} />
-          <meshStandardMaterial emissive={'#ffb347'} emissiveIntensity={1.1} color={'#ffb347'} roughness={0.35} metalness={0.3} />
+          <meshStandardMaterial emissive={ACCENT_AMBER} emissiveIntensity={1.1} color={ACCENT_AMBER} roughness={0.35} metalness={0.3} />
         </mesh>
       ))}
     </group>
@@ -107,7 +111,7 @@ function GrowthHalo(){
   return (
     <mesh ref={ring} rotation={[-Math.PI/2,0,0]} position={[0,0.02,0]}> 
       <ringGeometry args={[1.2,1.28,96]} />
-      <meshBasicMaterial color={'#19ffc0'} transparent opacity={0.25} blending={THREE.AdditiveBlending} />
+  <meshBasicMaterial color={ACCENT_BASE} transparent opacity={0.25} blending={THREE.AdditiveBlending} />
     </mesh>
   );
 }
@@ -177,20 +181,42 @@ function CarbonFlux(){
       <bufferGeometry>
         <bufferAttribute attach="attributes-position" array={positions} count={COUNT} itemSize={3} />
       </bufferGeometry>
-      <pointsMaterial color={'#19ffc0'} size={0.06} sizeAttenuation transparent opacity={0.55} />
+  <pointsMaterial color={ACCENT_BASE} size={0.06} sizeAttenuation transparent opacity={0.55} />
     </points>
   );
 }
 
 export function EcoGenesisHeroCanvas({ offsetX = 3.5 }: { offsetX?: number }){
+  const { resolved } = useTheme();
+  const isLight = resolved === 'light';
+  const ambientIntensity = isLight ? 0.65 : 0.45;
+  const hemiSky = isLight ? 0xffffff : 0x0b1d18;
+  const hemiGround = isLight ? 0xdedede : 0x020507;
+  const spotIntensity = isLight ? 3.2 : pick(EMISSIVE_INTENSITY.spot, resolved);
+  const bloomIntensity = isLight ? 0.55 : pick(BLOOM_INTENSITY.hero, resolved);
+  const crystalEmissive = isLight ? 0.22 : EMISSIVE_INTENSITY.hero.dark;
+  const groupRef = useRef<THREE.Group>(null);
+  // Post-mount adjust crystal emissive if light theme
+  useEffect(()=>{
+    if(!groupRef.current) return;
+    if(isLight){
+      groupRef.current.traverse(obj=>{
+        const mat = (obj as any).material as THREE.Material | undefined;
+        if(mat && (mat as any).emissiveIntensity !== undefined){
+          (mat as any).emissiveIntensity = Math.min((mat as any).emissiveIntensity, crystalEmissive);
+        }
+      });
+    }
+  },[isLight, crystalEmissive]);
   return (
-    <Canvas frameloop="demand" camera={{ position:[0,2,14], fov:50 }} dpr={[1,2]} gl={{ antialias:true }}>
-      <color attach="background" args={["#000000"]} />
-      <fog attach="fog" args={["#020507", 14, 80]} />
-      <ambientLight intensity={0.45} />
-      <spotLight position={[6,18,10]} intensity={2.8} angle={0.6} penumbra={0.9} color="#19ffc0" distance={140} decay={2} />
-      <pointLight position={[-8,5,-6]} intensity={0.5} color="#08352c" />
-      <group position={[offsetX,0,0]}>
+    <Canvas frameloop="always" camera={{ position:[0,2,14], fov:50 }} dpr={[1,2]} gl={{ antialias:true }}>
+      <SceneBackground />
+      {!isLight && <fog attach="fog" args={[ '#020507', 14, 80 ]} />}
+      <hemisphereLight args={[hemiSky, hemiGround, isLight ? 0.85 : 0.35]} />
+      <ambientLight intensity={ambientIntensity} />
+      <spotLight position={[6,18,10]} intensity={spotIntensity} angle={0.55} penumbra={0.85} color={ACCENT_BASE} distance={140} decay={2} />
+      <pointLight position={[-8,5,-6]} intensity={isLight?0.35:0.5} color="#08352c" />
+      <group ref={groupRef} position={[offsetX,0,0]}>
         <Core />
         <OrbitOracles />
         <GrowthHalo />
@@ -199,7 +225,7 @@ export function EcoGenesisHeroCanvas({ offsetX = 3.5 }: { offsetX?: number }){
       </group>
       <ParallaxCamera />
       <EffectComposer enableNormalPass={false}>
-        <Bloom mipmapBlur intensity={1.05} luminanceThreshold={0.18} luminanceSmoothing={0.22} radius={0.85} />
+        <Bloom mipmapBlur intensity={bloomIntensity} luminanceThreshold={0.32} luminanceSmoothing={0.3} radius={0.75} />
       </EffectComposer>
     </Canvas>
   );

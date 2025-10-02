@@ -3,6 +3,8 @@ import { Canvas, useFrame, useThree } from '@react-three/fiber';
 import { EffectComposer, Bloom } from '@react-three/postprocessing';
 import * as THREE from 'three';
 import { useRef, useMemo, useEffect } from 'react';
+import { SceneBackground } from '../SceneBackground';
+import { ACCENT_BASE } from '../themeColors';
 
 /* HeroForestCanvas
  * First-pass immersive hero scene with:
@@ -66,16 +68,16 @@ function HeroTree(){
           metalness={0.15}
           clearcoat={0.4}
           attenuationDistance={4}
-          attenuationColor="#19f5c3"
+          attenuationColor={ACCENT_BASE}
           color="#0a3026"
           emissive="#0a3026"
           transparent
           opacity={0.85}
         />
       </mesh>
-      <mesh ref={crystal} position={[0,3,0]}>
+      <mesh ref={crystal} position={[0,2.25,0]}>
         <icosahedronGeometry args={[0.9,0]} />
-        <meshStandardMaterial color="#19f5c3" emissive="#19f5c3" emissiveIntensity={1.2} metalness={0.6} roughness={0.15} />
+  <meshStandardMaterial color={ACCENT_BASE} emissive={ACCENT_BASE} emissiveIntensity={1.2} metalness={0.6} roughness={0.15} />
       </mesh>
     </group>
   );
@@ -147,7 +149,7 @@ function EmberParticles(){
       <bufferGeometry>
         <bufferAttribute attach="attributes-position" count={COUNT} array={positions} itemSize={3} />
       </bufferGeometry>
-      <pointsMaterial ref={mat} color="#19f5c3" size={0.03} sizeAttenuation transparent opacity={0.55} />
+  <pointsMaterial ref={mat} color={ACCENT_BASE} size={0.03} sizeAttenuation transparent opacity={0.55} />
     </points>
   );
 }
@@ -161,10 +163,10 @@ export function HeroForestCanvas(){
       gl={{ antialias:true }}
       className="hero-forest-canvas"
     >
-      <color attach="background" args={["#000000"]} />
+      <SceneBackground />
       <fog attach="fog" args={["#03070c", 12, 60]} />
       <ambientLight intensity={0.4} />
-      <spotLight position={[4,15,8]} intensity={2.5} angle={0.6} penumbra={0.9} color="#19f5c3" distance={120} decay={2} />
+  <spotLight position={[4,15,8]} intensity={2.5} angle={0.6} penumbra={0.9} color={ACCENT_BASE} distance={120} decay={2} />
       <pointLight position={[-6,6,-4]} intensity={0.6} color="#0d4033" />
       <group position={[0,0,0]}>
         <HeroTree />
@@ -175,7 +177,7 @@ export function HeroForestCanvas(){
           <meshStandardMaterial color="#050807" roughness={0.9} metalness={0.35} />
         </mesh>
       </group>
-  <ParallaxCameraController intensity={0.35} />
+    <ParallaxCameraController intensity={0.35} />
       <EffectComposer enableNormalPass={false}>
         <Bloom mipmapBlur intensity={1.1} luminanceThreshold={0.15} luminanceSmoothing={0.18} radius={0.85} />
       </EffectComposer>

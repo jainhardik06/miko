@@ -4,6 +4,9 @@ import { useRef, useMemo } from 'react';
 import { useFrame } from '@react-three/fiber';
 import * as THREE from 'three';
 import { EffectComposer, Bloom } from '@react-three/postprocessing';
+import { SceneBackground } from '../../components/SceneBackground';
+import { ACCENT_BASE, ACCENT_AMBER, BLOOM_INTENSITY } from '../../components/themeColors';
+import { useTheme } from '../../components/ThemeProvider';
 
 export function NetworkSceneContainer(){
   return (
@@ -29,22 +32,28 @@ export function NetworkSceneFull({ offsetX=4.5 }: { offsetX?: number }){
 }
 
 function NetworkScene({ reducedBloom=false }:{ reducedBloom?: boolean }){
+  const { resolved } = useTheme();
+  const isLight = resolved === 'light';
+  const bloomBase = BLOOM_INTENSITY.mini[isLight ? 'light' : 'dark'];
+  const bloomIntensity = reducedBloom ? bloomBase * 0.72 : bloomBase;
+  const pointIntensity = isLight ? (reducedBloom?10:16) : (reducedBloom?18:34);
   return (
     <>
-      <color attach="background" args={["#000"]} />
-      <ambientLight intensity={0.42} />
-      <pointLight position={[5,6,4]} intensity={reducedBloom?18:34} distance={32} color={'#19ffc0'} />
-      <Hub />
-      <PerimeterNodes />
-      <DynamicEdges />
+      <SceneBackground />
+      <hemisphereLight args={[ isLight?0xffffff:0x0b1d18, isLight?0xdddddd:0x020507, isLight?0.75:0.32 ]} />
+      <ambientLight intensity={isLight?0.55:0.42} />
+      <pointLight position={[5,6,4]} intensity={pointIntensity} distance={34} color={ACCENT_BASE} />
+      <Hub isLight={isLight} />
+      <PerimeterNodes isLight={isLight} />
+      <DynamicEdges isLight={isLight} />
       <EffectComposer enableNormalPass={false}>
-        <Bloom intensity={reducedBloom?0.5:0.9} luminanceThreshold={0.25} luminanceSmoothing={0.26} radius={0.8} mipmapBlur />
+        <Bloom intensity={bloomIntensity} luminanceThreshold={isLight?0.3:0.25} luminanceSmoothing={0.28} radius={0.78} mipmapBlur />
       </EffectComposer>
     </>
   );
 }
 
-function Hub(){
+function Hub({ isLight=false }:{ isLight?: boolean }){
   const inner = useRef<THREE.Mesh>(null);
   const shell = useRef<THREE.Mesh>(null);
   useFrame(({ clock }, dt)=>{
@@ -64,11 +73,11 @@ function Hub(){
     <group position={[0,0.2,0]}>
       <mesh ref={shell}>
         <icosahedronGeometry args={[1.5,1]} />
-        <meshPhysicalMaterial transmission={0.95} thickness={0.6} roughness={0.2} metalness={0.1} clearcoat={0.6} clearcoatRoughness={0.25} attenuationColor={'#19ffc0'} attenuationDistance={6} transparent opacity={0.9} color={'#062a23'} />
+  <meshPhysicalMaterial transmission={0.95} thickness={0.65} roughness={0.24} metalness={0.14} clearcoat={0.7} clearcoatRoughness={0.28} attenuationColor={ACCENT_BASE} attenuationDistance={6} transparent opacity={isLight?0.94:0.9} color={isLight?'#093229':'#062a23'} />
       </mesh>
       <mesh ref={inner}>
         <icosahedronGeometry args={[1.05,0]} />
-        <meshStandardMaterial emissive={'#19ffc0'} emissiveIntensity={1.2} color={'#19ffc0'} metalness={0.55} roughness={0.25} />
+  <meshStandardMaterial emissive={ACCENT_BASE} emissiveIntensity={isLight?0.4:1.2} color={ACCENT_BASE} metalness={0.6} roughness={0.22} />
       </mesh>
     </group>
   );
@@ -76,7 +85,7 @@ function Hub(){
 
 interface EdgeDescriptor { a:THREE.Vector3; b:THREE.Vector3; speed:number; }
 
-function PerimeterNodes(){
+function PerimeterNodes({ isLight=false }:{ isLight?: boolean }){
   const group = useRef<THREE.Group>(null);
   const COUNT = 14;
   const nodes = useMemo(()=> new Array(COUNT).fill(0).map((_,i)=>({ angle:(i/COUNT)*Math.PI*2, radius:4.2 + Math.sin(i)*0.2, y:0.2, scale:0.34 })), []);
@@ -97,14 +106,14 @@ function PerimeterNodes(){
       {nodes.map((n,i)=>(
         <mesh key={i} scale={n.scale}>
           <icosahedronGeometry args={[1,0]} />
-          <meshStandardMaterial emissive={'#19ffc0'} emissiveIntensity={0.7} color={'#19ffc0'} roughness={0.4} metalness={0.2} />
+          <meshStandardMaterial emissive={ACCENT_BASE} emissiveIntensity={isLight?0.28:0.7} color={ACCENT_BASE} roughness={0.42} metalness={0.22} />
         </mesh>
       ))}
     </group>
   );
 }
 
-function DynamicEdges(){
+function DynamicEdges({ isLight=false }:{ isLight?: boolean }){
   const group = useRef<THREE.Group>(null);
   const edges = useMemo(()=>{
     const arr: EdgeDescriptor[] = [];
@@ -165,14 +174,14 @@ function DynamicEdges(){
     <group ref={group}>
       {geometries.map((g,i)=>(
         <mesh key={i} geometry={g}>
-          <meshBasicMaterial color={'#19ffc0'} transparent opacity={0.3} blending={THREE.AdditiveBlending} />
+          <meshBasicMaterial color={ACCENT_BASE} transparent opacity={isLight?0.22:0.3} blending={THREE.AdditiveBlending} />
         </mesh>
       ))}
       <points ref={packets}>
         <bufferGeometry>
           <bufferAttribute attach="attributes-position" array={packetPositions} count={PACKET_COUNT} itemSize={3} />
         </bufferGeometry>
-        <pointsMaterial color={'#ffb347'} size={0.12} sizeAttenuation transparent opacity={0.85} />
+  <pointsMaterial color={'#ffb347'} size={0.12} sizeAttenuation transparent opacity={isLight?0.55:0.85} />
       </points>
     </group>
   );

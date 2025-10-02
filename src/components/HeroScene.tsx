@@ -1,5 +1,6 @@
 "use client";
 import { useEffect, useRef } from "react";
+import { ACCENT_BASE } from './themeColors';
 
 // Lightweight seed + particle orbit animation (no three.js) using Canvas 2D.
 // Particles increase & brighten with scroll progress of first viewport height.
@@ -51,8 +52,8 @@ export default function HeroScene(){
       ctx.fill();
       // Core seed
       ctx.beginPath();
-      ctx.fillStyle = '#0fe7aa';
-      ctx.shadowBlur = 18; ctx.shadowColor = '#0fe7aa';
+  ctx.fillStyle = ACCENT_BASE;
+  ctx.shadowBlur = 18; ctx.shadowColor = ACCENT_BASE;
       ctx.arc(cx,cy,(8+prog*4)*window.devicePixelRatio,0,Math.PI*2); ctx.fill();
       ctx.shadowBlur = 0;
       const visibleCount = Math.floor(prog * particles.length);

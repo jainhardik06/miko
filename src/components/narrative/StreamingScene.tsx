@@ -4,6 +4,9 @@ import { useRef, useMemo, useState } from 'react';
 import { useFrame } from '@react-three/fiber';
 import * as THREE from 'three';
 import { EffectComposer, Bloom } from '@react-three/postprocessing';
+import { SceneBackground } from '../../components/SceneBackground';
+import { ACCENT_BASE, BLOOM_INTENSITY } from '../../components/themeColors';
+import { useTheme } from '../../components/ThemeProvider';
 
 export function StreamingSceneContainer(){
   return (
@@ -29,22 +32,28 @@ export function StreamingSceneFull({ offsetX=4.5 }: { offsetX?: number }){
 }
 
 function StreamingScene({ reducedBloom=false }:{ reducedBloom?: boolean }){
+  const { resolved } = useTheme();
+  const isLight = resolved === 'light';
+  const bloomBase = BLOOM_INTENSITY.mini[isLight ? 'light' : 'dark'];
+  const bloomIntensity = reducedBloom ? bloomBase * 0.78 : bloomBase;
+  const spotIntensity = isLight ? (reducedBloom?420:780) : (reducedBloom?900:1600);
   return (
     <>
-      <color attach="background" args={["#000"]} />
-      <ambientLight intensity={0.45} />
-      <spotLight position={[6,8,6]} intensity={reducedBloom?900:1600} distance={40} angle={0.65} penumbra={0.75} color={'#19ffc0'} />
-      <Card />
-      <TokenSpiral />
-      <RateMeter />
+      <SceneBackground />
+      <hemisphereLight args={[ isLight?0xffffff:0x0b1d18, isLight?0xdddddd:0x020507, isLight?0.8:0.35 ]} />
+      <ambientLight intensity={isLight?0.58:0.45} />
+      <spotLight position={[6,8,6]} intensity={spotIntensity} distance={40} angle={0.6} penumbra={0.8} color={ACCENT_BASE} />
+      <Card isLight={isLight} />
+      <TokenSpiral isLight={isLight} />
+      <RateMeter isLight={isLight} />
       <EffectComposer enableNormalPass={false}>
-        <Bloom intensity={reducedBloom?0.55:0.85} luminanceThreshold={0.24} luminanceSmoothing={0.28} radius={0.8} mipmapBlur />
+        <Bloom intensity={bloomIntensity} luminanceThreshold={isLight?0.3:0.24} luminanceSmoothing={0.3} radius={0.75} mipmapBlur />
       </EffectComposer>
     </>
   );
 }
 
-function Card(){
+function Card({ isLight=false }:{ isLight?: boolean }){
   const frame = useRef<THREE.Mesh>(null);
   const holo = useRef<THREE.LineSegments>(null);
   useFrame((_,dt)=>{
@@ -59,10 +68,10 @@ function Card(){
     <group position={[0,0.2,0]}>
       <mesh ref={frame} scale={[3.1,4.2,0.12]}> 
         <boxGeometry args={[1,1,0.02]} />
-        <meshPhysicalMaterial transmission={1} thickness={0.4} roughness={0.25} metalness={0.1} clearcoat={0.8} clearcoatRoughness={0.25} attenuationColor={'#19ffc0'} attenuationDistance={4} transparent opacity={0.5} color={'#062a23'} />
+  <meshPhysicalMaterial transmission={1} thickness={0.45} roughness={0.3} metalness={0.14} clearcoat={0.85} clearcoatRoughness={0.28} attenuationColor={ACCENT_BASE} attenuationDistance={4.5} transparent opacity={isLight?0.62:0.5} color={isLight?'#0a332b':'#062a23'} />
       </mesh>
       <lineSegments ref={holo} geometry={lattice} position={[0,0,0]}>
-        <lineBasicMaterial color={'#19ffc0'} transparent opacity={0.4} />
+  <lineBasicMaterial color={ACCENT_BASE} transparent opacity={isLight?0.32:0.4} />
       </lineSegments>
     </group>
   );
@@ -70,7 +79,7 @@ function Card(){
 
 interface Pellet { pos:THREE.Vector3; t:number; speed:number; }
 
-function TokenSpiral(){
+function TokenSpiral({ isLight=false }:{ isLight?: boolean }){
   const group = useRef<THREE.Group>(null);
   const pelletsRef = useRef<THREE.InstancedMesh>(null);
   const MAX = 90;
@@ -117,17 +126,17 @@ function TokenSpiral(){
     <group ref={group} position={[0,0.4,0]}>
       <mesh rotation={[-Math.PI/2,0,0]} position={[0,-2.25,0]}> 
         <ringGeometry args={[1.9,2.05,96]} />
-        <meshBasicMaterial color={'#19ffc0'} transparent opacity={0.18} blending={THREE.AdditiveBlending} />
+  <meshBasicMaterial color={ACCENT_BASE} transparent opacity={isLight?0.14:0.18} blending={THREE.AdditiveBlending} />
       </mesh>
       <instancedMesh ref={pelletsRef} args={[undefined as any, undefined as any, MAX]}> 
         <sphereGeometry args={[0.2,16,16]} />
-        <meshBasicMaterial color={'#19ffc0'} transparent opacity={0.85} blending={THREE.AdditiveBlending} />
+  <meshBasicMaterial color={ACCENT_BASE} transparent opacity={isLight?0.6:0.85} blending={THREE.AdditiveBlending} />
       </instancedMesh>
     </group>
   );
 }
 
-function RateMeter(){
+function RateMeter({ isLight=false }:{ isLight?: boolean }){
   const bar = useRef<THREE.Mesh>(null);
   useFrame(({ clock })=>{
     const t = clock.getElapsedTime();
@@ -139,7 +148,7 @@ function RateMeter(){
   return (
     <group position={[2.1,-0.4,0]}>
       <mesh position={[0,0,0]}> <boxGeometry args={[0.08,2.2,0.08]} /> <meshBasicMaterial color={'#07342c'} /> </mesh>
-      <mesh ref={bar} position={[0,-1.1,0]} scale={[0.16,0.4,0.16]}> <boxGeometry args={[0.3,1,0.3]} /> <meshBasicMaterial color={'#19ffc0'} transparent opacity={0.85} blending={THREE.AdditiveBlending} /> </mesh>
+  <mesh ref={bar} position={[0,-1.1,0]} scale={[0.16,0.4,0.16]}> <boxGeometry args={[0.3,1,0.3]} /> <meshBasicMaterial color={ACCENT_BASE} transparent opacity={isLight?0.55:0.85} blending={THREE.AdditiveBlending} /> </mesh>
     </group>
   );
 }

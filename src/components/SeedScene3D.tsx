@@ -2,6 +2,7 @@
 import { Canvas, useFrame, useThree } from '@react-three/fiber';
 import { Suspense, useEffect, useMemo, useRef } from 'react';
 import * as THREE from 'three';
+import { ACCENT_BASE } from './themeColors';
 // Removed framer-motion-3d; we'll animate manually with useFrame.
 
 // Scroll progress hook (viewport based)
@@ -48,9 +49,9 @@ function SeedCore({ getProgress }: { getProgress: () => number }) {
     <mesh ref={ref} position={[0,0,0]}>
       <sphereGeometry args={[0.55, 48, 48]} />
       <meshStandardMaterial
-        emissive={'#0fe7aa'}
-        emissiveIntensity={0.2}
-        color={'#0fe7aa'}
+  emissive={ACCENT_BASE}
+  emissiveIntensity={0.2}
+  color={ACCENT_BASE}
         roughness={0.3}
         metalness={0.1}
         transparent
@@ -95,7 +96,7 @@ function Particles({ count = 160, getProgress }: ParticlesProps) {
   return (
   <instancedMesh ref={meshRef} args={[undefined as unknown as THREE.BufferGeometry, undefined as unknown as THREE.Material, count]}>
       <sphereGeometry args={[1, 8, 8]} />
-      <meshBasicMaterial transparent color={'#00ffe0'} opacity={0.4} />
+  <meshBasicMaterial transparent color={ACCENT_BASE} opacity={0.4} />
     </instancedMesh>
   );
 }
@@ -139,7 +140,7 @@ export default function SeedScene3D(){
           </mesh>
           <Particles getProgress={getProgress} />
           <ambientLight intensity={0.6} />
-          <pointLight position={[2,2,3]} intensity={2} color={'#0fe7aa'} />
+          <pointLight position={[2,2,3]} intensity={2} color={ACCENT_BASE} />
         </Suspense>
       </Canvas>
       <span className="sr-only">3D seed with orbiting particles responding to scroll</span>

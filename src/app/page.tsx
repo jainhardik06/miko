@@ -106,8 +106,8 @@ export default function LandingPage(){
               Tokenize ecological assets, stream carbon credits on-chain, and build a transparent offset marketplace grounded in cryptographic verifiability.
             </p>
             <div className="mt-10 flex flex-col sm:flex-row gap-4">
-              <Link href="/marketplace" className="px-6 py-3 rounded-md bg-emerald-600 hover:bg-emerald-500 text-sm font-medium shadow-lg shadow-emerald-600/30 transition">Launch App</Link>
-              <Link href="/how-it-works" className="px-6 py-3 rounded-md bg-neutral-800/70 hover:bg-neutral-700 text-sm font-medium border border-neutral-700 backdrop-blur-md">Learn More</Link>
+              <Link href="/marketplace" className="btn-primary">Launch App</Link>
+              <Link href="/how-it-works" className="btn-secondary">Learn More</Link>
             </div>
             <div className="mt-14 flex flex-wrap items-center gap-x-10 gap-y-6 opacity-70 text-[10px] tracking-wider font-medium reveal-seed reveal-delay-200">
               <span className="inline-flex items-center gap-1"> <span className="h-2 w-2 rounded-full bg-emerald-500 animate-pulse" /> ON-CHAIN MRV </span>
@@ -161,8 +161,8 @@ export default function LandingPage(){
           <h2 className="text-3xl font-semibold tracking-tight">Build an Atmanirbhar Green Economy</h2>
           <p className="mt-4 text-sm text-neutral-400 max-w-2xl mx-auto">Join us in creating a transparent, farmer-first regenerative finance substrate. Miko is a living protocol evolving with open data and cryptographic integrity.</p>
           <div className="mt-8 flex flex-col sm:flex-row gap-4 justify-center">
-            <Link href="/about" className="px-6 py-3 rounded-md bg-neutral-800/70 hover:bg-neutral-700 text-sm font-medium border border-neutral-700">Why Miko</Link>
-            <Link href="/marketplace" className="px-6 py-3 rounded-md bg-emerald-600 hover:bg-emerald-500 text-sm font-medium shadow shadow-emerald-600/30">Launch dApp</Link>
+            <Link href="/about" className="btn-secondary">Why Miko</Link>
+            <Link href="/marketplace" className="btn-primary">Launch dApp</Link>
           </div>
         </div>
       </section>

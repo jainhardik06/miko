@@ -4,6 +4,7 @@ import { useRef, useState } from "react";
 import { useFrame } from "@react-three/fiber";
 import * as THREE from 'three';
 import { EffectComposer, Bloom } from '@react-three/postprocessing';
+import { ACCENT_BASE } from '../themeColors';
 
 /** Placeholder SeedHandsScene
  * Future: replace orb + rings with stylized low-poly hand forms cradling a luminous seed.
@@ -41,7 +42,7 @@ function SeedCore(){
   const glowMat = useRef<THREE.MeshBasicMaterial>(null);
   const inner = useRef<THREE.MeshStandardMaterial>(null);
   const ringMat = useRef<THREE.MeshBasicMaterial>(null);
-  const [seedColor] = useState(() => new THREE.Color('#19ffc0'));
+  const [seedColor] = useState(() => new THREE.Color(ACCENT_BASE));
   const tmp = new THREE.Color();
   useFrame(({ clock }) => {
     const t = clock.getElapsedTime();
@@ -86,7 +87,7 @@ function EnergyRing({ radius, speed, tilt, matRef }: { radius: number; speed: nu
   return (
     <mesh ref={ref} rotation={[tilt,0,0]}> 
       <torusGeometry args={[radius, 0.015, 8, 128]} />
-      <meshBasicMaterial ref={matRef || localMat} color={'#19ffc0'} transparent opacity={0.7} blending={THREE.AdditiveBlending} />
+  <meshBasicMaterial ref={matRef || localMat} color={ACCENT_BASE} transparent opacity={0.7} blending={THREE.AdditiveBlending} />
     </mesh>
   );
 }

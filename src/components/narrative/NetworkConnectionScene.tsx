@@ -4,6 +4,7 @@ import { useRef, useMemo } from 'react';
 import { useFrame } from '@react-three/fiber';
 import * as THREE from 'three';
 import { EffectComposer, Bloom } from '@react-three/postprocessing';
+import { ACCENT_BASE } from '../themeColors';
 
 /**
  * NetworkConnectionScene
@@ -25,7 +26,7 @@ function NetworkConnectionScene(){
     <>
       <color attach="background" args={["#000000"]} />
       <ambientLight intensity={0.4} />
-      <pointLight position={[5,6,4]} intensity={40} distance={30} color={'#19ffc0'} />
+  <pointLight position={[5,6,4]} intensity={40} distance={30} color={ACCENT_BASE} />
       <IdleSway amp={0.08} speed={0.4}>
         <Pulsar />
         <Satellites />
@@ -57,11 +58,11 @@ function Pulsar(){
     <group>
       <mesh ref={halo}>
         <sphereGeometry args={[1, 42, 42]} />
-        <meshBasicMaterial transparent color={'#19ffc0'} opacity={0.2} blending={THREE.AdditiveBlending} />
+  <meshBasicMaterial transparent color={ACCENT_BASE} opacity={0.2} blending={THREE.AdditiveBlending} />
       </mesh>
       <mesh ref={core}>
         <icosahedronGeometry args={[0.9,1]} />
-        <meshStandardMaterial color={'#19ffc0'} emissive={'#19ffc0'} emissiveIntensity={1.4} roughness={0.25} metalness={0.2} />
+  <meshStandardMaterial color={ACCENT_BASE} emissive={ACCENT_BASE} emissiveIntensity={1.4} roughness={0.25} metalness={0.2} />
       </mesh>
     </group>
   );
@@ -87,7 +88,7 @@ function Satellites(){
       {sats.map((s,i)=>(
         <mesh key={i} scale={0.22}>
           <icosahedronGeometry args={[1,0]} />
-          <meshStandardMaterial color={'#19ffc0'} emissive={'#19ffc0'} emissiveIntensity={0.9} roughness={0.3} metalness={0.15} />
+          <meshStandardMaterial color={ACCENT_BASE} emissive={ACCENT_BASE} emissiveIntensity={0.9} roughness={0.3} metalness={0.15} />
         </mesh>
       ))}
     </group>
@@ -113,7 +114,7 @@ function ArcBeams(){
     <group ref={group}>
       {new Array(COUNT).fill(0).map((_,i)=>(
         <mesh key={i} rotation={[Math.PI/2,0, (i/COUNT)*Math.PI*2]} geometry={arcGeom}>
-          <meshBasicMaterial color={'#19ffc0'} transparent opacity={0.4} blending={THREE.AdditiveBlending} depthWrite={false} />
+          <meshBasicMaterial color={ACCENT_BASE} transparent opacity={0.4} blending={THREE.AdditiveBlending} depthWrite={false} />
         </mesh>
       ))}
     </group>

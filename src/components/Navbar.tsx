@@ -42,7 +42,7 @@ export function Navbar() {
         <div className="mt-4 nav-shell w-full items-center gap-8">
           {/* Left Brand Square */}
           <div className="flex items-center">
-            <Link href="/" className="flex items-center gap-2 font-semibold text-[18px] tracking-wide px-3 py-3 rounded-2xl bg-gradient-to-br from-[#081411] to-[#05100d]">
+            <Link href="/" className="brand-badge flex items-center gap-2 font-semibold text-[18px] tracking-wide px-3 py-3 rounded-2xl">
             <span>Miko.</span>
             </Link>
           </div>
