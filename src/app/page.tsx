@@ -1,14 +1,40 @@
 "use client";
 import Link from "next/link";
-import { useEffect } from "react";
-import { HeroForestCanvas } from "../components/narrative/HeroForestCanvas";
-import { SeedHandsSceneContainer } from "../components/narrative/SeedHandsScene";
-import { TreeAssetCardSceneContainer } from "../components/narrative/TreeAssetCardScene";
-import { NetworkConnectionSceneContainer } from "../components/narrative/NetworkConnectionScene";
+import { useEffect, useState } from "react";
+import { EcoGenesisHeroCanvas } from "../components/narrative/EcoGenesisHeroCanvas";
+import { VerticalSectionNav } from "../components/VerticalSectionNav";
+import { ImpactMetrics } from "../components/ImpactMetrics";
+import useReducedMotion from "../lib/useReducedMotion";
+import { VerificationSceneFull } from "../components/narrative/VerificationScene";
+import { StreamingSceneFull } from "../components/narrative/StreamingScene";
+import { NetworkSceneFull } from "../components/narrative/NetworkScene";
+
+
+function useResponsiveOffset(base:number){
+  const [val,setVal]=useState(base);
+  useEffect(()=>{
+    function recalc(){
+      const w=window.innerWidth;
+      if(w<640) setVal(base*0.4); else if(w<900) setVal(base*0.65); else if(w<1200) setVal(base*0.85); else setVal(base);
+    }
+    recalc();
+    window.addEventListener('resize',recalc);
+    return ()=>window.removeEventListener('resize',recalc);
+  },[base]);
+  return val;
+}
 
 export default function LandingPage(){
+  const heroOffset = useResponsiveOffset(4.5);
+  const featureOffset = useResponsiveOffset(4.5);
+  const reducedMotion = useReducedMotion();
+  useEffect(()=>{
+    if(reducedMotion) document.documentElement.classList.add('reduced-motion');
+    else document.documentElement.classList.remove('reduced-motion');
+  },[reducedMotion]);
   useEffect(() => {
-    const sections = Array.from(document.querySelectorAll("main section"));
+  const sections = Array.from(document.querySelectorAll("main section"));
+  const transitions = Array.from(document.querySelectorAll('.section-transition')) as HTMLElement[];
     const revealTargets = Array.from(document.querySelectorAll(".reveal-seed"));
     const activeObserver = new IntersectionObserver((entries) => {
       let topMost: IntersectionObserverEntry | null = null;
@@ -29,6 +55,16 @@ export default function LandingPage(){
 
     sections.forEach(s => activeObserver.observe(s));
 
+    const transitionObserver = new IntersectionObserver((entries)=>{
+      entries.forEach(e=>{
+        if(e.isIntersecting && e.target instanceof HTMLElement){
+          e.target.classList.add('in-view');
+          transitionObserver.unobserve(e.target);
+        }
+      });
+    }, { threshold:0.25 });
+    transitions.forEach(t=>transitionObserver.observe(t));
+
     const revealObserver = new IntersectionObserver((entries: IntersectionObserverEntry[]) => {
       entries.forEach(e => {
         if(e.isIntersecting && e.target instanceof HTMLElement){
@@ -40,82 +76,83 @@ export default function LandingPage(){
     revealTargets.forEach(t => revealObserver.observe(t));
 
     return () => {
-      activeObserver.disconnect();
+  activeObserver.disconnect();
+  transitionObserver.disconnect();
       revealObserver.disconnect();
     };
   }, []);
 
   return (
     <main className="w-full min-h-screen flex flex-col overflow-hidden">
-      {/* HERO FOREST */}
-      <section id="hero" className="relative w-full min-h-screen flex items-center justify-center pt-28 md:pt-32 pb-24">
-        <div className="absolute inset-0 -z-10">
-          <HeroForestCanvas />
-          <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_50%_55%,rgba(10,30,25,0.18),rgba(0,0,0,0.85))]" />
+      <VerticalSectionNav />
+      {/* HERO FULL-BLEED CANVAS BACKDROP */}
+      <section id="hero" className="relative w-full pt-28 md:pt-32 pb-32 overflow-visible">
+        {/* Canvas absolutely fills hero; no clipping so geometry can extend under text */}
+        <div className="absolute inset-0 -z-10 pointer-events-none">
+              <EcoGenesisHeroCanvas offsetX={heroOffset} />
         </div>
-        <div className="relative z-10 max-w-4xl px-6 text-center">
-          <h1 className="text-4xl sm:text-5xl lg:text-6xl font-semibold tracking-tight leading-tight reveal-seed">
-            <span className="block">Turn India&apos;s</span>
-            <span className="block">
-              <span className="text-emerald-400/90">Green</span>{' '}
-              <span className="hero-highlight">Cover</span>{' '}
-              <span className="text-emerald-400/90">into</span>
-            </span>
-            <span className="block">Digital Gold</span>
-          </h1>
-          <p className="mt-6 mx-auto max-w-2xl text-sm md:text-base text-neutral-300/90 leading-relaxed reveal-seed reveal-delay-100">
-            Tokenize ecological assets, stream carbon credits on-chain, and build a transparent offset marketplace grounded in cryptographic verifiability.
-          </p>
-          <div className="mt-10 flex flex-col sm:flex-row gap-4 justify-center">
-            <Link href="/marketplace" className="px-6 py-3 rounded-md bg-emerald-600 hover:bg-emerald-500 text-sm font-medium shadow-lg shadow-emerald-600/30 transition">Launch App</Link>
-            <Link href="/how-it-works" className="px-6 py-3 rounded-md bg-neutral-800/70 hover:bg-neutral-700 text-sm font-medium border border-neutral-700 backdrop-blur-md">Learn More</Link>
-          </div>
-          <div className="mt-14 flex flex-wrap items-center justify-center gap-x-10 gap-y-6 opacity-70 text-[10px] tracking-wider font-medium reveal-seed reveal-delay-200">
-            <span className="inline-flex items-center gap-1"> <span className="h-2 w-2 rounded-full bg-emerald-500 animate-pulse" /> ON-CHAIN MRV </span>
-            <span className="inline-flex items-center gap-1"> TRANSPARENT CREDITS </span>
-            <span className="inline-flex items-center gap-1"> FARMER FIRST </span>
-          </div>
-          <div className="absolute bottom-6 left-0 right-0 flex justify-center">
-            <div className="flex flex-col items-center text-[10px] font-mono text-neutral-600 animate-pulse">
-              <span>SCROLL</span>
-              <span className="mt-1 h-5 w-px bg-neutral-700" />
+        <div className="mx-auto max-w-6xl px-6">
+          <div className="relative text-left max-w-2xl">
+            <h1 className="text-4xl sm:text-5xl lg:text-6xl font-semibold tracking-tight leading-tight reveal-seed">
+              <span className="block">Turn India&apos;s</span>
+              <span className="block">
+                <span className="text-emerald-400/90">Green</span>{' '}
+                <span className="hero-highlight">Cover</span>{' '}
+                <span className="text-emerald-400/90">into</span>
+              </span>
+              <span className="block">Digital Gold</span>
+            </h1>
+            <p className="mt-6 max-w-lg text-sm md:text-base text-neutral-300/90 leading-relaxed reveal-seed reveal-delay-100">
+              Tokenize ecological assets, stream carbon credits on-chain, and build a transparent offset marketplace grounded in cryptographic verifiability.
+            </p>
+            <div className="mt-10 flex flex-col sm:flex-row gap-4">
+              <Link href="/marketplace" className="px-6 py-3 rounded-md bg-emerald-600 hover:bg-emerald-500 text-sm font-medium shadow-lg shadow-emerald-600/30 transition">Launch App</Link>
+              <Link href="/how-it-works" className="px-6 py-3 rounded-md bg-neutral-800/70 hover:bg-neutral-700 text-sm font-medium border border-neutral-700 backdrop-blur-md">Learn More</Link>
+            </div>
+            <div className="mt-14 flex flex-wrap items-center gap-x-10 gap-y-6 opacity-70 text-[10px] tracking-wider font-medium reveal-seed reveal-delay-200">
+              <span className="inline-flex items-center gap-1"> <span className="h-2 w-2 rounded-full bg-emerald-500 animate-pulse" /> ON-CHAIN MRV </span>
+              <span className="inline-flex items-center gap-1"> TRANSPARENT CREDITS </span>
+              <span className="inline-flex items-center gap-1"> FARMER FIRST </span>
             </div>
           </div>
         </div>
       </section>
 
       {/* FEATURE BLOCKS */}
-      <section id="annadata" className="relative py-32">
-        <div className="max-w-6xl mx-auto px-6 grid md:grid-cols-2 gap-16 items-center">
-          <div>
+      <section id="annadata" className="relative py-40 overflow-hidden">
+  <VerificationSceneFull offsetX={featureOffset} />
+        <div className="relative max-w-6xl mx-auto px-6">
+          <div className="max-w-xl">
             <h2 className="text-3xl font-semibold mb-5 reveal-seed">Empower the Annadata</h2>
-            <p className="text-sm text-neutral-300/90 leading-relaxed max-w-md reveal-seed reveal-delay-100">Onboard farmers with verifiable ecological data. Each approved tree becomes a cryptographic accrual point for carbon credit generation.</p>
-          </div>
-          <div className="reveal-seed reveal-delay-200">
-            <SeedHandsSceneContainer />
+            <p className="text-sm text-neutral-300/90 leading-relaxed reveal-seed reveal-delay-100">Onboard farmers with verifiable ecological data. Each approved tree becomes a cryptographic accrual point for carbon credit generation.</p>
           </div>
         </div>
       </section>
-      <section id="tokenize" className="relative py-32">
-        <div className="max-w-6xl mx-auto px-6 grid md:grid-cols-2 gap-16 items-center md:[&>*:first-child]:order-2">
-          <div>
+      <section id="tokenize" className="relative py-40 overflow-hidden">
+  <StreamingSceneFull offsetX={-featureOffset} />
+        <div className="relative max-w-6xl mx-auto px-6">
+          <div className="max-w-xl md:ml-auto text-left md:text-left">
             <h2 className="text-3xl font-semibold mb-5 reveal-seed">Tokenize & Stream</h2>
-            <p className="text-sm text-neutral-300/90 leading-relaxed max-w-md reveal-seed reveal-delay-100">Approved TreeNFTs stream CCT over time. Farmers retain ownership while liquidity and offset demand grow organically.</p>
+            <p className="text-sm text-neutral-300/90 leading-relaxed reveal-seed reveal-delay-100">Approved TreeNFTs stream CCT over time. Farmers retain ownership while liquidity and offset demand grow organically.</p>
           </div>
-            <div className="reveal-seed reveal-delay-200">
-              <TreeAssetCardSceneContainer />
-            </div>
         </div>
       </section>
-      <section id="network" className="relative py-32">
-        <div className="max-w-6xl mx-auto px-6 grid md:grid-cols-2 gap-16 items-center">
-          <div>
+      <section id="network" className="relative py-40 overflow-hidden">
+  <NetworkSceneFull offsetX={featureOffset} />
+        <div className="relative max-w-6xl mx-auto px-6">
+          <div className="max-w-xl">
             <h2 className="text-3xl font-semibold mb-5 reveal-seed">Network Effects</h2>
-            <p className="text-sm text-neutral-300/90 leading-relaxed max-w-md reveal-seed reveal-delay-100">A mesh of ecological assets underpins transparent offset markets— enabling capital efficiency, composability, and public verifiability.</p>
+            <p className="text-sm text-neutral-300/90 leading-relaxed reveal-seed reveal-delay-100">A mesh of ecological assets underpins transparent offset markets— enabling capital efficiency, composability, and public verifiability.</p>
           </div>
-          <div className="reveal-seed reveal-delay-200">
-            <NetworkConnectionSceneContainer />
+        </div>
+      </section>
+      <section id="impact" className="relative py-44" aria-labelledby="impact-heading">
+        <div className="relative max-w-6xl mx-auto px-6 section-transition">
+          <div className="max-w-2xl mb-10">
+            <h2 id="impact-heading" className="text-3xl font-semibold mb-5">Protocol Impact</h2>
+            <p className="text-sm text-neutral-300/90 leading-relaxed">Early momentum indicators from pilot regions demonstrating verifiable ecological asset onboarding and transparent credit streaming. (Sample data placeholders.)</p>
           </div>
+          <ImpactMetrics />
         </div>
       </section>
   {/* CTA Section */}

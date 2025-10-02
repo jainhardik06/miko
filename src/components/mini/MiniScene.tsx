@@ -10,14 +10,10 @@ import * as THREE from 'three';
  * - adaptive DPR (lower while idle)
  * - hover activates higher refresh for subtle motion
  */
-export function MiniScene({ children, className = "", onPointerActiveChange }: { children: React.ReactNode; className?: string; onPointerActiveChange?: (active: boolean)=>void; }) {
-  const [hovered, setHovered] = useState(false);
+export function MiniScene({ children, className = "" }: { children: React.ReactNode; className?: string; }) {
   const [needsRefresh, setNeedsRefresh] = useState(0);
   const [visible, setVisible] = useState(true);
   const containerRef = useRef<HTMLDivElement|null>(null);
-
-  const handlePointerEnter = () => { setHovered(true); onPointerActiveChange?.(true); setNeedsRefresh(n => n+1); };
-  const handlePointerLeave = () => { setHovered(false); onPointerActiveChange?.(false); };
 
   // Observe visibility to disable costly re-renders
   useEffect(() => {
@@ -34,16 +30,13 @@ export function MiniScene({ children, className = "", onPointerActiveChange }: {
   }, []);
 
   return (
-    <div ref={containerRef} className={`mini-scene-wrapper ${className}`}
-      onPointerEnter={handlePointerEnter}
-      onPointerLeave={handlePointerLeave}
-    >
+    <div ref={containerRef} className={`mini-scene-wrapper ${className}`}>
       <Canvas
         className="mini-scene-canvas"
-        dpr={hovered ? [1.2, 2] : [0.8, 1.3]}
+        dpr={[0.9, 1.6]}
         gl={{ antialias: true, alpha: true, powerPreference: 'high-performance' }}
         camera={{ position: [0,0,6], fov: 38 }}
-        frameloop={(hovered || visible) ? 'always' : 'demand'}
+        frameloop={visible ? 'always' : 'demand'}
         onCreated={(state) => {
           state.gl.setClearColor(new THREE.Color(0x000000), 0);
         }}

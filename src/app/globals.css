@@ -1,10 +1,11 @@
 @import "tailwindcss";
 
 :root {
-  --background: #ffffff;
+  --background: #020507; /* unified dark background */
   --foreground: #171717;
   --color-accent: #2ECC71;
   --color-accent-soft: #1d6f45;
+  --accent-amber: #ffb347;
   --surface-glass: rgba(20,20,24,0.55);
   --border-subtle: #222428;
   --radius-sm: 4px;
@@ -17,8 +18,8 @@
 /* CSS variables already declared on :root serve as design tokens. */
 
 @media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
+  :root { /* keep single-color intent even in dark scheme */
+    --background: #020507;
     --foreground: #ededed;
   }
 }
@@ -31,28 +32,13 @@ body {
   min-height: 100vh;
 }
 
+/* Reduced motion adjustments */
+.reduced-motion .reveal-seed { transition-duration:.4s; }
+.reduced-motion .section-transition { transition-duration:.6s; }
+.reduced-motion canvas { animation:none !important; }
+
 /* Fullscreen fixed cinematic radial gradient + animated grain */
-body:before, body:after {
-  content: "";
-  position: fixed;
-  inset: 0;
-  pointer-events: none;
-  z-index: -2;
-}
-body:before {
-  background: radial-gradient(circle at 50% 45%, #0A0F2B 0%, #04060F 55%, #000 90%);
-}
-body:after {
-  z-index: -1;
-  background:
-    repeating-radial-gradient(circle at 50% 50%, rgba(255,255,255,0.04) 0 0.5px, transparent 0.5px 2px),
-    radial-gradient(circle at 30% 20%, rgba(20,255,170,0.06), transparent 55%),
-    radial-gradient(circle at 70% 75%, rgba(0,180,120,0.05), transparent 65%);
-  mix-blend-mode: overlay;
-  opacity: .6;
-  animation: grainShift 18s linear infinite;
-  filter: blur(0.3px) contrast(105%);
-}
+/* Removed radial/grain overlays for single-color background */
 
 @keyframes grainShift {
   0% { transform: translate3d(0,0,0) scale(1); }
@@ -169,6 +155,10 @@ section:not([data-active='true'])::before { opacity:0; transform:scale(.9); }
 .reveal-delay-100 { transition-delay:.1s; }
 .reveal-delay-200 { transition-delay:.2s; }
 .reveal-delay-300 { transition-delay:.3s; }
+
+/* Section fade/scale transition wrapper */
+.section-transition { opacity:0; transform:translateY(40px) scale(.975); transition:opacity 1s cubic-bezier(.55,.1,.2,1), transform 1.2s cubic-bezier(.55,.1,.2,1); }
+.section-transition.in-view { opacity:1; transform:translateY(0) scale(1); }
 
 
 /* Generic subtle card styling */

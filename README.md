@@ -5,10 +5,10 @@
 </div>
 
 ## Overview
-This repository hosts the immersive landing experience built with Next.js + React Three Fiber plus the on‑chain carbon credit prototype (Move modules). The new "Narrative Cascade" architecture replaces a monolithic scroll canvas with:
+This repository hosts the immersive landing experience built with Next.js + React Three Fiber plus the on‑chain carbon credit prototype (Move modules). The evolved "Narrative Cascade" architecture replaces a monolithic scroll canvas with:
 
-1. Hero Forest (parallax, instancing, embers, glass crystal tree)
-2. Modular feature mini-scenes (Seed, Asset Card, Network) inside performance-managed glass cards
+1. EcoGenesis Hero (core crystal shell + orbit oracles + root veins + carbon flux + growth halo)
+2. Modular feature mini-scenes (Verification, Streaming, Network) inside performance-managed glass cards
 3. Demand-based rendering + intersection visibility throttling
 
 ## Tech Stack
@@ -21,19 +21,21 @@ This repository hosts the immersive landing experience built with Next.js + Reac
 ```
 src/app/page.tsx                  # Narrative composition & scroll observers
 src/components/narrative/         # Hero + mini scene set
-	HeroForestCanvas.tsx            # Instanced forest & parallax camera
-	SeedHandsScene.tsx              # Luminous seed placeholder
-	TreeAssetCardScene.tsx          # Holographic asset card
-	NetworkConnectionScene.tsx      # Pulsar + satellites + arc beams
-src/components/mini/MiniScene.tsx # Shared wrapper (demand frameloop + DPR adapt)
+	EcoGenesisHeroCanvas.tsx        # Hero genesis scene (core + orbits + flux)
+	VerificationScene.tsx           # Seed validation scan ring + lattice
+	StreamingScene.tsx              # Token streaming spiral + card
+	NetworkScene.tsx                # Dynamic network hub, edges & packets
+	(Legacy: HeroForestCanvas.tsx, SeedHandsScene.tsx, TreeAssetCardScene.tsx, NetworkConnectionScene.tsx)
+src/components/mini/MiniScene.tsx # Shared wrapper (frameloop & DPR adapt)
 move/                             # On-chain carbon credit modules (Aptos)
 ```
 
 ## Performance Strategy
-- Mini-scenes: IntersectionObserver toggles between `frameloop='always'` while visible/hovered and `demand` while offscreen.
-- Hero: Converted to `demand` with manual `invalidate()` on pointer parallax.
-- Instancing for background trees; additive blending for lightweight glow vs heavy postprocessing.
-- Adaptive DPR (0.8–1.3 idle, up to 2 on hover) to reduce fill cost on large displays.
+- Mini-scenes: IntersectionObserver toggles between `frameloop="always"` while visible / actively animating and `demand` when offscreen.
+- Hero: Runs `frameloop="demand"` and uses pointer parallax + internal animated systems (core pulse, orbit oracles, carbon flux) to call `invalidate()` implicitly each frame.
+- Instancing & batched attributes: token spiral pellets, carbon flux particles, network nodes/edges minimize draw calls.
+- Adaptive DPR (controlled in `MiniScene`): lowers pixel cost when idle while preserving sharpness on interaction.
+- Minimal post (single Bloom pass) with tuned `luminanceThreshold` to avoid over-glow.
 
 ## Extending a Mini-Scene
 1. Create `YourSceneNameContainer` similar to existing containers.
@@ -46,15 +48,15 @@ move/                             # On-chain carbon credit modules (Aptos)
 
 ## Visual Language
 - Glass cards: layered radial blend, subtle border luminescence on hover.
-- Emissive ecology green (`#19ffc0`) unified across seed, crystal, network arcs.
-- Background gradient + animated grain for cinematic depth without large textures.
+- Dual accent palette: ecology emerald `#19ffc0` (growth / energy) + amber `#ffb347` (oracle / validation signals).
+- Background radial gradient + animated grain for filmic depth without heavy textures.
 
 ## Future Enhancements (Shortlist)
-- Replace placeholder tree + seed with authored GLTF assets (baked normals / AO)
+- Replace legacy forest + seed placeholders with authored GLTF assets (baked normals / AO)
 - Shader-based atmospheric scattering & screen-space height fog
-- GPU particle rewrite (instanced / attribute animated) for embers
-- Procedural network arc ribbon shader (fading head, gradient energy pulse)
-- Caustics / light shaft pass over hero crystal
+- GPU particle rewrite (instanced attribute animation) for carbon flux & spiral tokens
+- Procedural network edge ribbon shader (trail fade, energy gradient)
+- Caustics / volumetric light shafts over hero core crystal
 
 ## Quick Start (Web)
 ```bash
