@@ -1,0 +1,29 @@
+version: '3.9'
+services:
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: miko_web
+    # For development we override the command to use dev server (hot reload)
+    command: npm run dev
+    environment:
+      - NODE_ENV=development
+      - NEXT_TELEMETRY_DISABLED=1
+      - NEXT_PUBLIC_MIKO_ADDRESS=${NEXT_PUBLIC_MIKO_ADDRESS:-0xADMINPLACEHOLDER}
+    ports:
+      - "3000:3000"
+    volumes:
+      - .:/app
+      - /app/node_modules
+    restart: unless-stopped
+    # Uncomment to enable Node.js inspector
+    # ports:
+    #   - "9229:9229"
+
+# Named volume example (currently unused)
+volumes:
+  # node_modules:
+  #   driver: local
+  # For now we rely on bind + anonymous volume above to avoid host conflicts.
+  placeholder: {}

@@ -1,0 +1,10 @@
+[package]
+name = "Miko"
+version = "0.0.1"
+
+[addresses]
+miko =  "0xA550C18" # placeholder publish address
+admin = "0xA550C18"
+
+[dependencies]
+AptosFramework = { git = "https://github.com/aptos-labs/aptos-core.git", subdir = "aptos-move/framework/aptos-framework", rev = "main" }

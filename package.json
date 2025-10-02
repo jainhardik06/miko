@@ -1,0 +1,40 @@
+{
+  "name": "miko",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev",
+    "dev:turbopack": "next dev --turbopack",
+    "build": "next build --turbopack",
+    "start": "next start",
+    "lint": "eslint"
+  },
+  "dependencies": {
+    "@aptos-labs/ts-sdk": "^5.1.0",
+    "@aptos-labs/wallet-adapter-ant-design": "^2.1.0",
+    "@aptos-labs/wallet-adapter-react": "^2.1.0",
+    "@react-three/drei": "^9.114.0",
+    "@react-three/fiber": "^8.17.10",
+    "@react-three/postprocessing": "^2.19.1",
+    "aptos": "^1.21.0",
+    "framer-motion": "11.18.2",
+    "got": "^11.8.6",
+    "next": "14.2.5",
+    "postprocessing": "^6.37.8",
+    "react": "18.2.0",
+    "react-dom": "18.2.0",
+    "three": "^0.160.0",
+    "zustand": "^4.5.0"
+  },
+  "devDependencies": {
+    "@eslint/eslintrc": "^3",
+    "@tailwindcss/postcss": "^4",
+    "@types/node": "^20",
+    "@types/react": "^18",
+    "@types/react-dom": "^18",
+    "eslint": "^9",
+    "eslint-config-next": "14.2.5",
+    "tailwindcss": "^4",
+    "typescript": "^5"
+  }
+}
