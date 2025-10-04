@@ -1,8 +1,9 @@
 import type { Metadata } from "next";
 import "./globals.css";
-import { WalletProviders } from "../components/WalletProviders";
 import { Navbar } from "../components/Navbar";
 import { ThemeProvider } from "../components/ThemeProvider";
+import { AuthProvider } from "../components/auth/AuthProvider";
+import { AuthModal } from "../components/auth/AuthModal";
 import { ToastProvider } from "../components/ToastProvider";
 
 
@@ -20,15 +21,14 @@ export default function RootLayout({
     <html lang="en">
   <body className={`antialiased min-h-screen flex flex-col bg-neutral-950 text-neutral-50`}>        
   <ThemeProvider>
-  <WalletProviders>
-  <ToastProvider>
+      <ToastProvider>
+        <AuthProvider>
           <Navbar />
-          <div className="flex-1">
-            {children}
-          </div>
+          <div className="flex-1">{children}</div>
           <footer className="px-6 py-10 text-center text-[11px] text-neutral-600 border-t border-neutral-900 mt-16">Prototype – Not Production Code</footer>
-  </ToastProvider>
-  </WalletProviders>
+          <AuthModal />
+        </AuthProvider>
+      </ToastProvider>
   </ThemeProvider>
       </body>
     </html>

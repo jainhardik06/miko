@@ -1,0 +1,61 @@
+version: "3.9"
+services:
+  web:
+    image: jainhardik06/miko-web:latest
+    container_name: miko_web
+    environment:
+      - NODE_ENV=production
+      - NEXT_TELEMETRY_DISABLED=1
+      - NEXT_PUBLIC_API_ORIGIN=${API_ORIGIN:-http://backend:5001}
+      - NEXT_PUBLIC_MIKO_ADDRESS=${NEXT_PUBLIC_MIKO_ADDRESS}
+    ports:
+      - "3000:3000"
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+  backend:
+    image: jainhardik06/miko-api:latest
+    container_name: miko_api
+    environment:
+      - PORT=5001
+      - NODE_ENV=production
+      - CLIENT_ORIGIN=${CLIENT_ORIGIN:-http://localhost:3000}
+      - DATABASE_URL=${DATABASE_URL}
+      - JWT_SECRET=${JWT_SECRET}
+      - JWT_EXPIRES=1d
+      - OTP_LENGTH=6
+      - OTP_TTL_MS=300000
+      - WALLET_MESSAGE_PREFIX=Miko Auth
+      - RESEND_API_KEY=${RESEND_API_KEY}
+      - EMAIL_FROM=${EMAIL_FROM}
+    ports:
+      - "5001:5001"
+    restart: unless-stopped
+    depends_on:
+      - mongo
+
+  mongo:
+    image: mongo:7
+    container_name: miko_mongo
+    restart: unless-stopped
+    volumes:
+      - mongo-data:/data/db
+    ports:
+      - "27017:27017"
+
+  mongo-express:
+    image: mongo-express:1
+    container_name: miko_mongo_express
+    restart: unless-stopped
+    environment:
+      - ME_CONFIG_MONGODB_SERVER=mongo
+      - ME_CONFIG_BASICAUTH_USERNAME=${ME_CONFIG_BASICAUTH_USERNAME:-admin}
+      - ME_CONFIG_BASICAUTH_PASSWORD=${ME_CONFIG_BASICAUTH_PASSWORD:-admin}
+    depends_on:
+      - mongo
+    ports:
+      - "8081:8081"
+
+volumes:
+  mongo-data: {}

@@ -1,29 +1,68 @@
-version: '3.9'
 services:
   web:
     build:
       context: .
       dockerfile: Dockerfile
     container_name: miko_web
-    # For development we override the command to use dev server (hot reload)
     command: npm run dev
     environment:
       - NODE_ENV=development
       - NEXT_TELEMETRY_DISABLED=1
       - NEXT_PUBLIC_MIKO_ADDRESS=${NEXT_PUBLIC_MIKO_ADDRESS:-0xADMINPLACEHOLDER}
+      - NEXT_PUBLIC_API_ORIGIN=http://localhost:5001
     ports:
       - "3000:3000"
     volumes:
       - .:/app
       - /app/node_modules
     restart: unless-stopped
-    # Uncomment to enable Node.js inspector
-    # ports:
-    #   - "9229:9229"
+    depends_on:
+      - backend
 
-# Named volume example (currently unused)
+  backend:
+    build: ./backend
+    container_name: miko_api
+    environment:
+      - PORT=5001
+      - DATABASE_URL=mongodb://mongo:27017/miko
+      - CLIENT_ORIGIN=http://localhost:3000
+      - JWT_SECRET=dev_secret_change_me
+      - JWT_EXPIRES=1d
+      - OTP_LENGTH=6
+      - OTP_TTL_MS=300000
+      - WALLET_MESSAGE_PREFIX=Miko Auth
+    ports:
+      - "5001:5001"
+    volumes:
+      - ./backend:/app
+    depends_on:
+      - mongo
+    command: sh -c "npm install --no-audit --no-fund && node src/index.js"
+    restart: unless-stopped
+
+  mongo:
+    image: mongo:7
+    container_name: miko_mongo
+    restart: unless-stopped
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo-data:/data/db
+
+  mongo-express:
+    image: mongo-express:1
+    container_name: miko_mongo_express
+    restart: unless-stopped
+    depends_on:
+      - mongo
+    environment:
+      - ME_CONFIG_MONGODB_SERVER=mongo
+      - ME_CONFIG_BASICAUTH_USERNAME=admin
+      - ME_CONFIG_BASICAUTH_PASSWORD=admin
+      # Disable readOnly to allow editing (optional). Leave default for safety.
+      # - ME_CONFIG_OPTIONS_READONLY=true
+    ports:
+      - "8081:8081"
+
 volumes:
-  # node_modules:
-  #   driver: local
-  # For now we rely on bind + anonymous volume above to avoid host conflicts.
-  placeholder: {}
+  mongo-data: {}

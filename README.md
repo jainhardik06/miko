@@ -51,6 +51,110 @@ move/                             # On-chain carbon credit modules (Aptos)
 - Dual accent palette: ecology emerald `#19ffc0` (growth / energy) + amber `#ffb347` (oracle / validation signals).
 - Background radial gradient + animated grain for filmic depth without heavy textures.
 
+## Authentication – "Digital Atrium"
+The platform ships a multi‑stage, cinematic authentication & onboarding funnel called the **Digital Atrium**. It blends glassmorphism, subtle grid/particle motifs, and staged micro‑interactions to make login / signup feel like an intentional part of the narrative rather than a blocking form.
+
+### Goals
+1. Unify login & new account pathways (email / phone, federated, wallet) inside one adaptive modal.
+2. Provide progressive disclosure: collect only what is needed per stage (entry → verification → role → corporate details).
+3. Maintain light & dark theme fidelity (studio light theme restrains bloom / emissive for readability).
+4. Offer enterprise readiness hooks (future: SSO, deeper KYC) via an extendable state machine.
+
+### Architecture Overview
+```
+<AuthProvider>
+	state: { open, stage, loading, error, role, identifiers, corporate }
+	actions: openModal(), closeModal(), go(nextStage), back(), submitOtp(code), selectRole(r), submitCorporate(data)
+<AuthModal /> (portal/dialog semantics)
+	├─ EntryStage        (#1 choose method + capture email/phone)
+	├─ OtpStage          (#2 6-digit verification)
+	├─ RoleStage         (#3 Individual vs Corporate)
+	└─ CorporateStage    (#4 Company Name, CIN, GSTIN)
+```
+Render integration lives near the root layout so the modal is globally accessible (`layout.tsx` wraps children with `AuthProvider` + mounts `<AuthModal />`). A navbar button simply calls `openModal()` via the context.
+
+### Stage Flow Logic
+| Stage | Purpose | Exit Condition | Next |
+|-------|---------|----------------|------|
+| entry | Collect user identifier or federated trigger | Valid email/phone submit OR Google/Wallet click | otp / role (federated may bypass) |
+| otp | Verify short‑lived code (6 boxes) | Code accepted | role |
+| role | Choose user type | Selection + Continue | corporate (if Corporate) or close (if Individual) |
+| corporate | Gather org metadata | Valid form submit | close / downstream dashboard |
+
+### Validation Summary
+| Field | Pattern (simplified) | Notes |
+|-------|----------------------|-------|
+| Email | `/^[^@\s]+@[^@\s]+\.[^@\s]+$/` | Intentionally lightweight – replace with robust RFC lib if needed |
+| Phone | `/^[0-9]{10}$/` (example) | Regional logic TBD; pluggable adapter recommended |
+| OTP   | 6 numeric chars | Auto‑advance & backspace navigation |
+| CIN   | `/^[A-Z0-9]{21}$/i` (placeholder) | Adjust to authoritative jurisdiction spec |
+| GSTIN | `/^[0-9A-Z]{15}$/i` | Replace with official checksum validator |
+
+### Styling & Micro‑Interactions
+Implemented primarily in `globals.css`:
+* **Glass Atrium Container**: layered gradient border + backdrop blur + internal radial fade.
+* **Grid / Substrate Pattern**: subtle opacity to avoid moiré on light theme.
+* **Sheen Animation** (`atriumSheen`): timed horizontal pass for premium feel (throttled to avoid distraction).
+* **Role Card Pulse** (`rolePulse`): minimal scale/opacity breathing when not focused; stops when active.
+* **Press Scale**: shared interaction class scales buttons 0.97 for tactile feedback.
+* **Cross‑Fade Stages**: framer‑motion or CSS fade ensures zero layout jump between stages.
+
+### Theming
+Tokens use existing dark/light CSS variables; the modal avoids pure white (#FFF) in light mode—opting for elevated neutral surfaces to preserve depth against high‑key backgrounds. Emissive elements in the adjacent 3D crystal are reduced in light mode to keep focus on form elements.
+
+### Accessibility Notes
+* ESC + overlay click close.
+* Focus outlines preserved (`:focus-visible`).
+* OTP inputs maintain logical tab order and support paste of full code.
+* ARIA: Dialog semantics can be enhanced further (next iteration: trap focus + aria-live for errors).
+
+### Replacing Async Stubs
+Current async functions simulate latency with `setTimeout`. Replace them:
+```ts
+// Example inside AuthProvider
+async function submitOtp(code: string) {
+	setLoading(true);
+	try {
+		await api.verifyOtp(identifier, code); // real API
+		go('role');
+	} catch (e) {
+		setError('Invalid or expired code');
+	} finally {
+		setLoading(false);
+	}
+}
+```
+Recommended real endpoints:
+1. `POST /auth/request-code` { identifier }
+2. `POST /auth/verify-code` { identifier, code }
+3. `POST /auth/profile` { role, ...corporate }
+4. Optional wallet: signature challenge `GET /auth/wallet-challenge` → `POST /auth/wallet-verify`.
+
+### Extensibility Hooks
+| Use Case | Extension Point |
+|----------|-----------------|
+| Add WebAuthn | Insert new stage after `entry` before `otp`; or replace OTP with WebAuthn challenge/resume. |
+| Social / SSO (e.g., GitHub) | Add provider button in `EntryStage` dispatching `go('role')` on success. |
+| KYC Tiering | Split corporate stage into multiple sub‑stages; update state machine enum. |
+| Analytics | Wrap `go()` calls to emit events (`auth_stage_transition`). |
+
+### Minimal Integration Checklist
+1. Ensure `<AuthProvider>` wraps `app` root.
+2. Add a trigger (e.g., Navbar Login) calling `openModal()`.
+3. Supply real API adapters; remove simulation delays.
+4. Strengthen regex patterns or introduce a dedicated validation util.
+5. (Optional) Implement focus trap & inert background for WCAG AA.
+
+### Future Enhancements (Auth)
+* WebAuthn + device binding fallback to OTP.
+* Progressive wallet connect merging on‑chain identity with email.
+* Rate limiting + lockout visuals (animated cooldown arc on button).
+* Frictionless re‑entry (skip stages when session still warm).
+* Audit trail & structured error telemetry.
+
+For contributor onboarding, this section should provide enough surface area to extend auth without reversing existing design decisions.
+
+
 ## Future Enhancements (Shortlist)
 - Replace legacy forest + seed placeholders with authored GLTF assets (baked normals / AO)
 - Shader-based atmospheric scattering & screen-space height fog
@@ -269,6 +373,52 @@ Suggested commit prefix convention:
 * Add a service for an Aptos indexer or mock oracle
 * Multi-stage test layer executing Move unit tests
 * GitHub Actions workflow building and pushing container image on PR merge
+
+### Publishing Images to Docker Hub
+
+Two images are produced:
+
+| Image | Context | Purpose |
+|-------|---------|---------|
+| `jainhardik06/miko-web` | project root (Next.js multi-stage) | Frontend / static + server components |
+| `jainhardik06/miko-api` | `backend/` folder | Auth/API service |
+
+Build & push (replace tag if versioning):
+```powershell
+docker build -t jainhardik06/miko-web:latest .
+docker build -t jainhardik06/miko-api:latest backend
+docker push jainhardik06/miko-web:latest
+docker push jainhardik06/miko-api:latest
+```
+
+Run everything (production style) with pre-built images:
+```powershell
+docker compose -f docker-compose.prod.yml up -d
+```
+
+Environment required (supply via `.env` or inline):
+```
+DATABASE_URL=mongodb://mongo:27017/miko   # Or remote Atlas cluster
+JWT_SECRET=replace_me
+NEXT_PUBLIC_MIKO_ADDRESS=0xADMINPLACEHOLDER
+EMAIL_FROM=noreply@yourdomain
+RESEND_API_KEY= # optional if using Resend
+```
+
+To override images locally (for a quick test without pushing):
+```powershell
+docker compose -f docker-compose.prod.yml build
+docker compose -f docker-compose.prod.yml up -d
+```
+
+### Shipping Your Teammate a One-Command Setup
+1. Push both images to Docker Hub.
+2. Send them a small `.env` file containing the secrets above.
+3. They run: `docker compose -f docker-compose.prod.yml --env-file .env up -d`
+4. Open: Frontend http://localhost:3000, API http://localhost:5001, DB UI http://localhost:8081
+
+If you later host Mongo remotely (Atlas), remove the `mongo` & `mongo-express` services or comment them out and set `DATABASE_URL` to the remote connection string.
+
 
 ---
 

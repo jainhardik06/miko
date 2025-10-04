@@ -4,12 +4,11 @@ const HeroScene = dynamic(()=>import('@/components/HeroScene'), { ssr:false, loa
 import { useEffect, useState } from 'react';
 import { fetchListings, listTokensTx, buyCCT, fetchListing, Listing, TxResult } from '@/lib/aptos';
 import { useToast } from '@/components/ToastProvider';
-import { useWallet } from '@aptos-labs/wallet-adapter-react';
 import { useMikoStore } from '@/state/store';
 
 export default function MarketplacePage() {
   const account = useMikoStore(s => s.account);
-  const { signAndSubmitTransaction } = useWallet();
+  const signAndSubmitTransaction = async (_tx: unknown)=>{ console.warn('Marketplace: TODO integrate direct Aptos tx submit'); return { hash:'0xPLACEHOLDER' } as TxResult; };
   const [listings, setListings] = useState<Listing[]>([]);
   const [loading, setLoading] = useState(false);
   const [creating, setCreating] = useState(false);
@@ -47,7 +46,7 @@ export default function MarketplacePage() {
     try {
     setTxStatus('Submitting listing…'); push({ message: 'Submitting listing…', type:'info'});
   const tx = listTokensTx(account, amount, price);
-  const pending: TxResult = await (signAndSubmitTransaction as unknown as (t: unknown)=>Promise<TxResult>)(tx);
+  const pending: TxResult = await signAndSubmitTransaction(tx);
   setTxStatus('Submitted: ' + pending.hash.slice(0,10) + '… confirming'); push({ message: 'Listing tx submitted', type:'success'});
   // optimistic refresh; could poll transaction later
   setForm({ amount: '', price: '' });
@@ -62,7 +61,7 @@ export default function MarketplacePage() {
     try {
     setTxStatus(`Buying ${qty} from #${listingId}…`); push({ message: `Buying ${qty} tokens`, type:'info'});
   const tx = buyCCT(account, listingId, qty);
-  const pending: TxResult = await (signAndSubmitTransaction as unknown as (t: unknown)=>Promise<TxResult>)(tx);
+  const pending: TxResult = await signAndSubmitTransaction(tx);
   setTxStatus('Tx ' + pending.hash.slice(0,10) + '… executing'); push({ message: 'Buy transaction submitted', type:'success'});
       // incremental single fetch
       const updated = await fetchListing(listingId);

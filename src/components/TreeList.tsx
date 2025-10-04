@@ -1,7 +1,6 @@
 "use client";
 import { useEffect, useState, useCallback } from 'react';
 import { fetchTrees, pendingAmount, buildClaimCCTTx, Tree, TxResult } from '../lib/aptos';
-import { useWallet } from '@aptos-labs/wallet-adapter-react';
 import { useMikoStore } from '../state/store';
 
 export function TreeList() {
@@ -9,7 +8,8 @@ export function TreeList() {
   const [trees, setTrees] = useState<Tree[]>([]);
   const [loading, setLoading] = useState(false);
   const [claimingId, setClaimingId] = useState<number | null>(null);
-  const { signAndSubmitTransaction } = useWallet();
+  // Adapter removed: placeholder signer (integrate direct SDK later)
+  const signAndSubmitTransaction = async (_tx: unknown)=>{ console.warn('TODO: integrate Aptos SDK sign & submit'); return { hash:'0xPLACEHOLDER' } as unknown as TxResult; };
 
   const load = useCallback(async () => {
     if (!account) return;
@@ -37,7 +37,7 @@ export function TreeList() {
     try {
       setTrees(cur => cur.map(t => t.id === id ? { ...t, cumulative_claimed: t.cumulative_claimed + (t.pending || 0), pending: 0 } : t));
   const tx = buildClaimCCTTx(account, id);
-  await (signAndSubmitTransaction as unknown as (t: unknown)=>Promise<TxResult>)(tx);
+  await signAndSubmitTransaction(tx);
       const p = await pendingAmount(id);
       setTrees(cur => cur.map(t => t.id === id ? { ...t, pending: p } : t));
     } finally { setClaimingId(null); }

@@ -4,8 +4,8 @@ import { usePathname } from "next/navigation";
 import { ConnectWalletButton } from "./ConnectWallet";
 import ThemeToggle from "./ThemeToggle";
 import { useMikoStore } from "../state/store";
-import { useWallet } from "@aptos-labs/wallet-adapter-react";
 import { useState } from "react";
+import { useAuth } from "./auth/AuthProvider";
 
 type SimpleLink = { label: string; href: string; cta?: boolean };
 const mainButtons: SimpleLink[] = [
@@ -32,9 +32,9 @@ function SegButton({ link }: { link: SimpleLink }) {
 }
 
 export function Navbar() {
-  const { connected, connect, wallets } = useWallet();
   const account = useMikoStore(s=>s.account);
   const [open, setOpen] = useState(false);
+  const { openModal } = useAuth();
 
   return (
     <header className="fixed top-0 inset-x-0 z-50">
@@ -50,10 +50,10 @@ export function Navbar() {
           <div className="hidden md:flex flex-1 justify-center">
             <div className="nav-btn-group">
               {mainButtons.map(btn => <SegButton key={btn.href} link={btn} />)}
-              {!connected && !account && (
-                <button onClick={()=>{ const first = wallets?.[0]; if(first) connect(first.name); }} className="nav-btn cta">Login / Signup</button>
+              {!account && (
+                <button onClick={()=>{ openModal(); }} className="nav-btn cta">Login / Signup</button>
               )}
-              {(connected || account) && (
+              {account && (
                 <ConnectWalletButton />
               )}
             </div>
@@ -81,8 +81,8 @@ export function Navbar() {
             </div>
             <div className="mt-3 flex items-center justify-between gap-4">
               <ThemeToggle variant="square" />
-              {(!connected && !account) ? (
-                <button onClick={()=>{ const first = wallets?.[0]; if(first) connect(first.name); setOpen(false); }} className="nav-btn cta text-[12px] py-3 px-4">Login / Signup</button>
+              {!account ? (
+                <button onClick={()=>{ openModal(); setOpen(false); }} className="nav-btn cta text-[12px] py-3 px-4">Login / Signup</button>
               ) : <ConnectWalletButton />}
             </div>
           </div>

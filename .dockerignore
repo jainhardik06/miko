@@ -1,3 +1,19 @@
+node_modules
+.next
+dist
+build
+coverage
+*.log
+Dockerfile*
+docker-compose*.yml
+.git
+.gitignore
+**/.DS_Store
+*.local
+backend/node_modules
+backend/.env*
+.env*
+mongo-data
 # Ignore node modules & build artifacts (handled by Docker multistage or mounted in dev)
 node_modules
 .next
