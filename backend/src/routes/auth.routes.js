@@ -39,14 +39,24 @@ router.post('/otp/request', async (req,res)=>{
     return res.status(500).json({ error:'Failed to generate code' });
   }
   // Attempt to send email (non-blocking failure)
-  let emailSent = true;
+  let emailSent = true; let emailError;
   try { await sendOtpEmail(email, code); }
-  catch(e){ emailSent = false; console.error('Send OTP error', e); }
+  catch(e){
+    emailSent = false; emailError = e.message; console.error('Send OTP error', e);
+  }
   // Dev diagnostics: always log code when not production OR explicit flag set
   if(process.env.NODE_ENV !== 'production' || process.env.LOG_OTP_CODES === 'true'){
     console.log(`[otp][dev] ${email.toLowerCase()} -> code=${code}`);
   }
   const payload = { success:true, emailSent };
+  if(!emailSent && (process.env.NODE_ENV !== 'production')){
+    payload.emailError = emailError;
+    if(process.env.RESEND_SANDBOX_FALLBACK === 'true'){
+      payload.hint = 'Check logs for fallback attempt. If still failing, verify Resend domain or API key.';
+    } else {
+      payload.hint = 'Verify domain in Resend or enable RESEND_SANDBOX_FALLBACK=true for dev.';
+    }
+  }
   if(process.env.OTP_DEV_EXPOSE === 'true'){
     // Expose code in JSON ONLY if explicitly enabled (never enable in prod)
     payload.devCode = code;

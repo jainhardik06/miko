@@ -110,17 +110,21 @@ Frontend should parse query params and proceed directly to username + role stage
 ## Environment Variables
 See `.env.example` in `backend/` for required configuration.
 
-### Email (Resend)
-Set:
+### Email (Resend Only)
+Set the following (see `.env.example`):
 ```
 RESEND_API_KEY=your_resend_key
 EMAIL_FROM=noreply@yourverifieddomain.com
 ```
+`EMAIL_FROM` must belong to a verified domain in your Resend dashboard (Domains section). Free sandbox domains (`onboarding@resend.dev`) are fine for quick tests but use your own domain for production.
+
 Steps:
-1. Create API key in Resend dashboard.
-2. Add sending domain & publish DNS (DKIM) records.
-3. Wait for verification (status: Verified) before production sends.
-4. For local dev you may still omit the key and the service will fallback to SMTP if SMTP_* vars are present.
+1. Add & verify sending domain (publish DKIM + return-path records).
+2. Generate an API key (Full Access for dev, restrict scope later if needed).
+3. Set environment variables & restart backend.
+4. Trigger `POST /api/auth/otp/request` and confirm a 202/200 response and email receipt.
+
+If sending fails you'll see `[mail][error]` logs; ensure domain is verified and key is valid.
 
 ## Security Notes / Next Steps
 * Replace in-memory OTP store with Redis (attach nonce to prevent replay).

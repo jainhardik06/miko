@@ -31,6 +31,10 @@ services:
       - OTP_LENGTH=6
       - OTP_TTL_MS=300000
       - WALLET_MESSAGE_PREFIX=Miko Auth
+      # Resend email (provide these via your local shell env or replace inline)
+      - RESEND_API_KEY=${RESEND_API_KEY}
+      - EMAIL_FROM=${EMAIL_FROM:-onboarding@resend.dev}
+      - RESEND_SANDBOX_FALLBACK=true
     ports:
       - "5001:5001"
     volumes:
