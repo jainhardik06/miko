@@ -175,6 +175,16 @@ Remove-Item -Recurse -Force node_modules,.next,package-lock.json
 npm install
 ```
 
+## Database Setup (MongoDB Atlas)
+1. Provision a free MongoDB Atlas cluster (or reuse an existing cluster).
+2. Create a database user with access to your target database (recommended name: `miko`).
+3. Copy the connection string from Atlas ("Connect your application") and paste it into `backend/.env` as `DATABASE_URL`.
+4. Set `DATABASE_NAME` in `backend/.env` to the logical database you want the API to use (e.g., `miko`).
+5. Restart the backend (`npm run dev` or Docker) so the new environment variables are loaded.
+6. Use MongoDB Compass or the Atlas Data Explorer to verify collections (`users`, `otps`, etc.) once traffic starts flowing.
+
+> ℹ️ No MongoDB containers run locally anymore. All environments now rely on the Atlas connection provided via `DATABASE_URL`.
+
 ## Move Contracts Quick Start
 ```powershell
 aptos move compile --package-dir move
@@ -323,7 +333,19 @@ Docker Compose reads this automatically.
 ```powershell
 docker-compose up --build
 ```
-Then open http://localhost:3000
+Then open http://localhost:3000.
+
+Compose reads environment variables from a `.env` file in the repo root. Create one (or export variables in your shell) containing at least:
+
+```bash
+DATABASE_URL=mongodb+srv://<username>:<password>@<cluster-host>.mongodb.net/?retryWrites=true&w=majority
+DATABASE_NAME=miko
+JWT_SECRET=replace_me
+RESEND_API_KEY=<resend-api-key>
+EMAIL_FROM=<verified-from-address>
+```
+
+> After editing `docker-compose.yml`, run `docker compose down --remove-orphans` to ensure legacy services (e.g., `mongo_express`) are stopped before bringing the stack back with `docker compose up`.
 
 Code edits on the host trigger immediate refresh because the project folder is mounted as a volume.
 
@@ -368,6 +390,7 @@ Suggested commit prefix convention:
 | Stale dependencies | `docker-compose build --no-cache` |
 | Node modules mismatch | Remove anonymous volume: `docker volume prune` then rebuild |
 | Port already in use | Adjust `3000:3000` mapping or free the port |
+| Backend can't reach Mongo | Confirm `DATABASE_URL`/`DATABASE_NAME` are exported for Docker (e.g., store them in a `.env` file that Docker Compose reads). |
 
 ### Future Enhancements
 * Add a service for an Aptos indexer or mock oracle

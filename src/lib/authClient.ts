@@ -3,6 +3,29 @@ export const API_ORIGIN = process.env.NEXT_PUBLIC_API_ORIGIN || 'http://localhos
 
 const DEFAULT_TIMEOUT_MS = 8000;
 
+export interface PendingSignupSnapshot {
+  email?: { email: string; verifiedAt?: string };
+  wallet?: { address: string; network: string; publicKey?: string; verifiedAt?: string };
+  google?: { googleId: string; email?: string; verifiedAt?: string };
+  createdAt?: number;
+  initialMethod?: string | null;
+}
+
+export interface PendingSignupStatus {
+  initialMethod?: 'google' | 'wallet' | 'otp' | null;
+  has?: {
+    email?: boolean;
+    wallet?: boolean;
+    google?: boolean;
+  };
+  requirements?: {
+    wallet?: boolean;
+    email?: boolean;
+    google?: boolean;
+    emailOrGoogle?: boolean;
+  };
+}
+
 class NetworkError extends Error {
   status?: number;
   data?: any;
@@ -50,22 +73,63 @@ export async function checkApiHealth(){
 export async function requestOtp(email: string){
   return jsonFetch('/api/auth/otp/request', { method:'POST', body: JSON.stringify({ email }) });
 }
-export async function verifyOtp(email:string, code:string){
-  return jsonFetch('/api/auth/otp/verify', { method:'POST', body: JSON.stringify({ email, code }) });
+export async function verifyOtp(email:string, code:string, pendingToken?:string){
+  const payload:any = { email, code };
+  if(pendingToken) payload.pendingToken = pendingToken;
+  return jsonFetch('/api/auth/otp/verify', { method:'POST', body: JSON.stringify(payload) });
 }
 export async function fetchWalletChallenge(){
   return jsonFetch('/api/auth/wallet/challenge');
 }
-export async function verifyWalletSignature(payload:{ address:string; publicKey:string; signature:string; message:string; fullMessage?:string; network?:string }){
+export async function verifyWalletSignature(payload:{ address:string; publicKey:string; signature:string; message:string; fullMessage?:string; network?:string; pendingToken?:string }){
   return jsonFetch('/api/auth/wallet/verify', { method:'POST', body: JSON.stringify(payload) });
 }
-export async function signup(payload:any){
-  return jsonFetch('/api/auth/signup', { method:'POST', body: JSON.stringify(payload) });
+export async function getPendingSignupStatus(pendingToken:string){
+  return jsonFetch('/api/auth/signup/status', { method:'POST', body: JSON.stringify({ pendingToken }) }) as Promise<{ pending: PendingSignupSnapshot | null; status: PendingSignupStatus | null }>;
 }
+export async function completeSignup(payload:{ pendingToken:string; username:string; role:'INDIVIDUAL'|'CORPORATE'; companyName?:string; cin?:string; gstin?:string; }){
+  return jsonFetch('/api/auth/signup/complete', { method:'POST', body: JSON.stringify(payload) });
+}
+
+export async function fetchCurrentUser(token:string){
+  return jsonFetch('/api/auth/me', { method:'GET', headers:{ Authorization:`Bearer ${token}` } });
+}
+
+export async function sendLogout(token:string){
+  return jsonFetch('/api/auth/logout', { method:'POST', headers:{ Authorization:`Bearer ${token}` } });
+}
+
 export async function submitCorporate(token:string, payload:{ companyName:string; cin:string; gstin:string; }){
   return jsonFetch('/api/profile/corporate', { method:'POST', body: JSON.stringify(payload), headers:{ Authorization:`Bearer ${token}` } });
 }
 
-export function googleAuthUrl(){
+export async function checkUsernameAvailability(username:string){
+  return jsonFetch(`/api/auth/username/check?u=${encodeURIComponent(username)}`);
+}
+
+export function googleAuthUrl(pendingToken?:string){
+  if(pendingToken){
+    return `${API_ORIGIN}/api/auth/google?pendingToken=${encodeURIComponent(pendingToken)}`;
+  }
   return `${API_ORIGIN}/api/auth/google`;
+}
+
+// Profile linking helpers
+export async function linkWallet(token:string, payload:{ address:string; network?:string; publicKey?:string }){
+  return jsonFetch('/api/auth/link/wallet', { method:'POST', body: JSON.stringify(payload), headers:{ Authorization:`Bearer ${token}` } });
+}
+export async function linkEmailRequest(token:string, email:string){
+  return jsonFetch('/api/auth/link/email/request', { method:'POST', body: JSON.stringify({ email }), headers:{ Authorization:`Bearer ${token}` } });
+}
+export async function linkEmailVerify(token:string, email:string, code:string){
+  return jsonFetch('/api/auth/link/email/verify', { method:'POST', body: JSON.stringify({ email, code }), headers:{ Authorization:`Bearer ${token}` } });
+}
+export function linkGoogleInitUrl(token:string){
+  return `${API_ORIGIN}/api/auth/link/google/init?token=${encodeURIComponent(token)}`;
+}
+export async function updateCurrentUser(token:string, payload:{ username?:string }){
+  return jsonFetch('/api/auth/me', { method:'PATCH', body: JSON.stringify(payload), headers:{ Authorization:`Bearer ${token}` } });
+}
+export async function deleteAccount(token:string){
+  return jsonFetch('/api/auth/me', { method:'DELETE', headers:{ Authorization:`Bearer ${token}` } });
 }

@@ -1,42 +1,136 @@
 "use client";
-import { createContext, useContext, useState, useCallback, useRef, useEffect } from 'react';
-import { AnimatePresence, motion } from 'framer-motion';
+import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
+import { fetchCurrentUser, sendLogout } from '../../lib/authClient';
 
-export type AuthStage = 'entry' | 'otp' | 'role' | 'corporate';
+type AuthRole = 'INDIVIDUAL' | 'CORPORATE';
 
-interface AuthContextValue {
-  open: boolean;
-  stage: AuthStage;
-  emailOrPhone: string;
-  role: 'individual' | 'corporate' | null;
-  openModal: ()=>void;
-  closeModal: ()=>void;
-  toStage: (s:AuthStage)=>void;
-  setEmailOrPhone: (v:string)=>void;
-  setRole: (r:'individual'|'corporate')=>void;
+export interface AuthenticatedUser {
+  id: string;
+  username: string | null;
+  role: AuthRole;
 }
 
-const AuthContext = createContext<AuthContextValue|undefined>(undefined);
+export interface AuthMethodsSummary {
+  google: boolean;
+  passwordless: boolean;
+  wallets: Array<{ address: string; network: string }>;
+}
+
+interface AuthContextValue {
+  user: AuthenticatedUser | null;
+  methods: AuthMethodsSummary | null;
+  loading: boolean;
+  token: string | null;
+  loginWithToken: (token: string)=>Promise<void>;
+  logout: ()=>Promise<void>;
+  refresh: ()=>Promise<void>;
+}
+
+const AuthContext = createContext<AuthContextValue | undefined>(undefined);
+
+function readStoredToken(){
+  if(typeof window === 'undefined') return null;
+  try { return window.localStorage.getItem('miko_token'); }
+  catch { return null; }
+}
+
+function writeStoredToken(token: string | null){
+  if(typeof window === 'undefined') return;
+  try {
+    if(token){ window.localStorage.setItem('miko_token', token); }
+    else { window.localStorage.removeItem('miko_token'); }
+  } catch(err){ console.warn('[auth] failed to persist token', err); }
+}
 
 export function AuthProvider({ children }:{ children: React.ReactNode }){
-  const [open, setOpen] = useState(false);
-  const [stage, setStage] = useState<AuthStage>('entry');
-  const [emailOrPhone, setEmailOrPhone] = useState('');
-  const [role, setRole] = useState<'individual'|'corporate'|null>(null);
+  const [token, setToken] = useState<string | null>(()=> readStoredToken());
+  const [user, setUser] = useState<AuthenticatedUser | null>(null);
+  const [methods, setMethods] = useState<AuthMethodsSummary | null>(null);
+  const [loading, setLoading] = useState(true);
 
-  const openModal = useCallback(()=>{ setOpen(true); setStage('entry'); },[]);
-  const closeModal = useCallback(()=>{ setOpen(false); },[]);
-  const toStage = useCallback((s:AuthStage)=> setStage(s),[]);
-
-  // Close on ESC
-  useEffect(()=>{
-    function onKey(e:KeyboardEvent){ if(e.key==='Escape') setOpen(false); }
-    window.addEventListener('keydown', onKey);
-    return ()=> window.removeEventListener('keydown', onKey);
+  const loadProfile = useCallback(async (incomingToken: string | null)=>{
+    if(!incomingToken){
+      setUser(null); setMethods(null); setLoading(false);
+      return;
+    }
+    setLoading(true);
+    try {
+      const me = await fetchCurrentUser(incomingToken);
+      setUser({ id: me.user.id, username: me.user.username ?? null, role: me.user.role });
+      setMethods(me.methods);
+    } catch(err){
+      console.warn('[auth] failed to load session profile', err);
+      setUser(null); setMethods(null);
+      writeStoredToken(null);
+      setToken(null);
+    } finally {
+      setLoading(false);
+    }
   },[]);
 
+  useEffect(()=>{ loadProfile(token); }, [token, loadProfile]);
+
+  useEffect(()=>{
+    const handler = (e: StorageEvent)=>{
+      if(e.key === 'miko_token'){
+        setToken(e.newValue ?? null);
+      }
+    };
+    if(typeof window !== 'undefined'){
+      window.addEventListener('storage', handler);
+      return ()=> window.removeEventListener('storage', handler);
+    }
+  },[]);
+
+  const loginWithToken = useCallback(async (newToken: string)=>{
+    writeStoredToken(newToken);
+    setToken(newToken);
+    await loadProfile(newToken);
+  },[loadProfile]);
+
+  const logout = useCallback(async ()=>{
+    const current = readStoredToken();
+    if(current){
+      try { await sendLogout(current); } catch(err){ console.warn('[auth] logout request failed', err); }
+    }
+    writeStoredToken(null);
+    setToken(null);
+    setUser(null);
+    setMethods(null);
+  },[]);
+
+  const refresh = useCallback(async ()=>{
+    await loadProfile(readStoredToken());
+  },[loadProfile]);
+
+  useEffect(()=>{
+    const handler = (event: Event)=>{
+      const custom = event as CustomEvent<{ token?: string | null }>;
+      if(typeof custom.detail?.token === 'string'){
+        void loginWithToken(custom.detail.token);
+      }
+      if(custom.detail?.token === null){
+        void logout();
+      }
+    };
+    if(typeof window !== 'undefined'){
+      window.addEventListener('miko:auth', handler as EventListener);
+      return ()=> window.removeEventListener('miko:auth', handler as EventListener);
+    }
+  },[loginWithToken, logout]);
+
+  const value = useMemo<AuthContextValue>(()=>({
+    user,
+    methods,
+    loading,
+    token,
+    loginWithToken,
+    logout,
+    refresh
+  }), [user, methods, loading, token, loginWithToken, logout, refresh]);
+
   return (
-    <AuthContext.Provider value={{ open, stage, emailOrPhone, role, openModal, closeModal, toStage, setEmailOrPhone, setRole }}>
+    <AuthContext.Provider value={value}>
       {children}
     </AuthContext.Provider>
   );

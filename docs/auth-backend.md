@@ -12,10 +12,19 @@ All responses are JSON.
 | GET | /api/health | Liveness check |
 | GET | /api/auth/google | Initiate Google OAuth |
 | GET | /api/auth/google/callback | OAuth callback (redirects with token or signup params) |
+| GET | /api/auth/username/check?u= | Username availability check |
+| GET | /api/auth/me | Current authenticated user + methods (JWT) |
 | POST | /api/auth/otp/request | Request OTP (email) |
 | POST | /api/auth/otp/verify | Verify OTP + login/signup decision |
 | GET | /api/auth/wallet/challenge | Obtain login message + nonce |
 | POST | /api/auth/wallet/verify | Verify signature and login/signup decision |
+| POST | /api/auth/link/wallet | Link an additional wallet (JWT) |
+| POST | /api/auth/link/email/request | Begin email link (OTP send) (JWT) |
+| POST | /api/auth/link/email/verify | Complete email link via OTP (JWT) |
+| GET | /api/auth/methods | Methods summary only (JWT) |
+| POST | /api/auth/logout | Stateless logout placeholder (JWT) |
+| GET | /api/auth/link/google/init | Initiate Google linking (JWT) |
+| GET | /api/auth/link/google/callback | Google linking callback |
 | POST | /api/auth/signup | Persist new user post-verification |
 | POST | /api/profile/corporate | Submit corporate profile (JWT) |
 
@@ -37,10 +46,15 @@ Response: `{ "success": true }`
 ```json
 { "email": "user@example.com", "code": "123456" }
 ```
-Responses:
-Login:
+Responses (examples):
+Existing user login:
 ```json
-{ "login": true, "token": "<JWT>", "user": { "id": "...", "role": "INDIVIDUAL" } }
+{
+  "login": true,
+  "token": "<JWT>",
+  "user": { "id": "...", "role": "INDIVIDUAL", "username": "eco_builder" },
+  "methods": { "google": false, "passwordless": true, "wallets": [] }
+}
 ```
 Needs signup:
 ```json
@@ -63,7 +77,7 @@ Response:
   "network": "aptos"
 }
 ```
-Responses mirror OTP verify (login vs needsSignup with `prefill.wallet`).
+Responses mirror OTP verify (login vs needsSignup with `prefill.wallet`). Login response adds `existingUser:true` and `methods` summary.
 
 ### POST /api/auth/signup
 ```json
@@ -85,12 +99,39 @@ Alternative wallet:
 Responses:
 Individual:
 ```json
-{ "created": true, "token": "<JWT>", "user": { "id": "...", "role": "INDIVIDUAL" } }
+{
+  "created": true,
+  "token": "<JWT>",
+  "user": { "id": "...", "role": "INDIVIDUAL", "username": "eco_builder" },
+  "methods": { "google": true, "passwordless": false, "wallets": [] }
+}
 ```
 Corporate:
 ```json
-{ "created": true, "corporatePending": true, "userId": "..." }
+{
+  "created": true,
+  "corporatePending": true,
+  "userId": "...",
+  "methods": { "google": false, "passwordless": false, "wallets": [{"address":"0x..","network":"aptos"}] }
+}
 ```
+
+### GET /api/auth/me (JWT)
+Returns the current user profile + linked methods.
+
+### POST /api/auth/link/wallet (JWT)
+```json
+{ "address": "0x..", "network": "aptos", "publicKey": "0x..." }
+```
+Response:
+```json
+{ "linked": true, "methods": { "google": true, "passwordless": true, "wallets": [{"address":"0x..","network":"aptos"}] } }
+```
+
+### Link Email Flow (JWT)
+1. `POST /api/auth/link/email/request` `{ "email": "user@example.com" }`
+2. `POST /api/auth/link/email/verify` `{ "email": "user@example.com", "code": "123456" }`
+Both ensure the email is not already used by another user.
 
 ### POST /api/profile/corporate (JWT)
 Authorization: `Bearer <JWT>` (only after signup if corporate)
@@ -109,6 +150,12 @@ Frontend should parse query params and proceed directly to username + role stage
 
 ## Environment Variables
 See `.env.example` in `backend/` for required configuration.
+
+### MongoDB
+- `DATABASE_URL` – Atlas connection string (`mongodb+srv://user:pass@cluster.mongodb.net/?retryWrites=true...`).
+- `DATABASE_NAME` – Logical database inside the cluster (e.g., `miko`). If omitted, the database encoded in the URI is used.
+
+There is no bundled MongoDB container anymore; ensure your Atlas IP access list allows the environment where the backend is running.
 
 ### Email (Resend Only)
 Set the following (see `.env.example`):
@@ -129,7 +176,7 @@ If sending fails you'll see `[mail][error]` logs; ensure domain is verified and 
 ## Security Notes / Next Steps
 * Replace in-memory OTP store with Redis (attach nonce to prevent replay).
 * Implement wallet challenge persistence & expiration.
-* Add rate limiting (failed OTP / wallet attempts).
+* Add rate limiting (failed OTP / wallet attempts & link attempts).
 * Add CSRF protection if using cookies for session tokens.
 * Add refresh token rotation if longer sessions needed.
 * Add Google OAuth state parameter & nonce for anti-CSRF.
@@ -141,4 +188,26 @@ import { requestOtp, verifyOtp, fetchWalletChallenge, verifyWalletSignature, sig
 
 ## Corporate Verification Lifecycle
 `PENDING` -> manual or automated review process -> update to `VERIFIED` or `REJECTED` via an admin route (future scope).
+
+## Methods Summary Object
+Returned on login/signup/link endpoints:
+```json
+{
+  "google": true,
+  "passwordless": true,
+  "wallets": [ { "address": "0x...", "network": "aptos" } ]
+}
+```
+
+## Acceptance Criteria Mapping
+| Criterion | Implemented Via |
+|-----------|-----------------|
+| Google signup -> individual login | `/api/auth/google/*` + `/api/auth/signup` (method=google) |
+| Wallet-only signup -> login | `/api/auth/wallet/verify` + `/api/auth/signup` (method=wallet) |
+| Prevent duplicate wallet for new signup when already linked | Duplicate checks in `/api/auth/signup` and `/api/auth/wallet/verify` |
+| Login with any linked method | All verify routes issue JWT using same stored `authMethods` |
+| Corporate flow with verification fields | `/api/auth/signup` (role=CORPORATE includes company fields) or `/api/profile/corporate` |
+| Single record stores all methods | Schema `authMethods` aggregation + linking endpoints |
+| Redirect after success | Backend issues token / redirect query params; frontend performs final navigation |
+| Prevent duplicate signup if wallet method supplies existing email | Guard in `/api/auth/signup` wallet branch (EMAIL conflict => instruct login) |
 

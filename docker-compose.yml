@@ -24,7 +24,8 @@ services:
     container_name: miko_api
     environment:
       - PORT=5001
-      - DATABASE_URL=mongodb://mongo:27017/miko
+      - DATABASE_URL=${DATABASE_URL}
+      - DATABASE_NAME=${DATABASE_NAME:-miko}
       - CLIENT_ORIGIN=http://localhost:3000
       - JWT_SECRET=dev_secret_change_me
       - JWT_EXPIRES=1d
@@ -39,34 +40,5 @@ services:
       - "5001:5001"
     volumes:
       - ./backend:/app
-    depends_on:
-      - mongo
     command: sh -c "npm install --no-audit --no-fund && node src/index.js"
     restart: unless-stopped
-
-  mongo:
-    image: mongo:7
-    container_name: miko_mongo
-    restart: unless-stopped
-    ports:
-      - "27017:27017"
-    volumes:
-      - mongo-data:/data/db
-
-  mongo-express:
-    image: mongo-express:1
-    container_name: miko_mongo_express
-    restart: unless-stopped
-    depends_on:
-      - mongo
-    environment:
-      - ME_CONFIG_MONGODB_SERVER=mongo
-      - ME_CONFIG_BASICAUTH_USERNAME=admin
-      - ME_CONFIG_BASICAUTH_PASSWORD=admin
-      # Disable readOnly to allow editing (optional). Leave default for safety.
-      # - ME_CONFIG_OPTIONS_READONLY=true
-    ports:
-      - "8081:8081"
-
-volumes:
-  mongo-data: {}

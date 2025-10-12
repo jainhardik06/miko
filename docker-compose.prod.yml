@@ -22,6 +22,7 @@ services:
       - NODE_ENV=production
       - CLIENT_ORIGIN=${CLIENT_ORIGIN:-http://localhost:3000}
       - DATABASE_URL=${DATABASE_URL}
+      - DATABASE_NAME=${DATABASE_NAME:-miko}
       - JWT_SECRET=${JWT_SECRET}
       - JWT_EXPIRES=1d
       - OTP_LENGTH=6
@@ -32,30 +33,3 @@ services:
     ports:
       - "5001:5001"
     restart: unless-stopped
-    depends_on:
-      - mongo
-
-  mongo:
-    image: mongo:7
-    container_name: miko_mongo
-    restart: unless-stopped
-    volumes:
-      - mongo-data:/data/db
-    ports:
-      - "27017:27017"
-
-  mongo-express:
-    image: mongo-express:1
-    container_name: miko_mongo_express
-    restart: unless-stopped
-    environment:
-      - ME_CONFIG_MONGODB_SERVER=mongo
-      - ME_CONFIG_BASICAUTH_USERNAME=${ME_CONFIG_BASICAUTH_USERNAME:-admin}
-      - ME_CONFIG_BASICAUTH_PASSWORD=${ME_CONFIG_BASICAUTH_PASSWORD:-admin}
-    depends_on:
-      - mongo
-    ports:
-      - "8081:8081"
-
-volumes:
-  mongo-data: {}
