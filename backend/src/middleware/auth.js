@@ -23,3 +23,11 @@ export function signSession(user){
   const token = jwt.sign(payload, process.env.JWT_SECRET, { expiresIn: process.env.JWT_EXPIRES || '1d' });
   return token;
 }
+
+export function requireRole(...roles){
+  return (req,res,next)=>{
+    if(!req.user) return res.status(401).json({ error:'Unauthorized' });
+    if(roles.includes(req.user.role)) return next();
+    return res.status(403).json({ error:'Forbidden: insufficient role' });
+  };
+}

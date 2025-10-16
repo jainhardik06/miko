@@ -18,7 +18,7 @@ const CorporateProfileSchema = new mongoose.Schema({
 
 const UserSchema = new mongoose.Schema({
   username: { type:String, unique:true, sparse:true },
-  role: { type:String, enum:['INDIVIDUAL','CORPORATE'], default:'INDIVIDUAL' },
+  role: { type:String, enum:['INDIVIDUAL','CORPORATE','VALIDATOR','ADMIN'], default:'INDIVIDUAL' },
   email: { type:String, lowercase:true, index:true },
   authMethods: {
     google: {

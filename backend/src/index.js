@@ -6,6 +6,8 @@ import './config/passport.js';
 import { connectDb } from './config/db.js';
 import authRoutes from './routes/auth.routes.js';
 import profileRoutes from './routes/profile.routes.js';
+import verifyRoutes from './routes/verify.routes.js';
+import mintRoutes from './routes/mint.routes.js';
 
 const app = express();
 
@@ -29,6 +31,8 @@ app.use(passport.initialize());
 app.get('/api/health', (_req,res)=> res.json({ ok:true, service:'auth', time:Date.now() }));
 app.use('/api/auth', authRoutes);
 app.use('/api/profile', profileRoutes);
+app.use('/api/verify', verifyRoutes);
+app.use('/api/mint', mintRoutes);
 
 const PORT = process.env.PORT || 5001;
 connectDb().then(()=> {
