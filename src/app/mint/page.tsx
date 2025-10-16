@@ -73,6 +73,9 @@ export default function MintPage() {
   const [step, setStep] = useState<Step>("intro");
   const [videoReady, setVideoReady] = useState(false);
   const [streamError, setStreamError] = useState<string | null>(null);
+  const [cameraFacing, setCameraFacing] = useState<"environment" | "user">("environment");
+  const [retryAttempt, setRetryAttempt] = useState(0);
+  const [nextRetryIn, setNextRetryIn] = useState<number | null>(null);
   const [sensors, setSensors] = useState<LiveSensors>({});
   const [watchId, setWatchId] = useState<number | null>(null);
   const [capturedDataUrl, setCapturedDataUrl] = useState<string | null>(null);
@@ -84,6 +87,8 @@ export default function MintPage() {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const mediaStreamRef = useRef<MediaStream | null>(null);
+  const retryTimeoutRef = useRef<number | null>(null);
+  const countdownIntervalRef = useRef<number | null>(null);
 
   const speciesOptions = useMemo(
     () => [
@@ -153,21 +158,64 @@ export default function MintPage() {
     }
   }
 
-  const startVideo = useCallback(async () => {
+  const startVideo = useCallback(async (preferredFacing?: "environment" | "user") => {
+    const facing = preferredFacing ?? cameraFacing;
     setStreamError(null);
+    setVideoReady(false);
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: "environment" } }, audio: false });
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: {
+          facingMode: { ideal: facing },
+          width: { ideal: 1280 },
+          height: { ideal: 720 },
+        },
+        audio: false,
+      });
       mediaStreamRef.current = stream;
       if (videoRef.current) {
         videoRef.current.srcObject = stream;
-        await videoRef.current.play();
+        try { await videoRef.current.play(); } catch {}
       }
-      setVideoReady(true);
+      setTimeout(() => setVideoReady(Boolean(videoRef.current && (videoRef.current.videoWidth || 0) > 0)), 200);
     } catch (e: any) {
-      setStreamError(e?.message || "Unable to access camera");
-      setVideoReady(false);
+      // Fallback: try opposite facing if back camera not available
+      if (facing === "environment") {
+        try {
+          const altStream = await navigator.mediaDevices.getUserMedia({
+            video: {
+              facingMode: { ideal: "user" },
+              width: { ideal: 1280 },
+              height: { ideal: 720 },
+            },
+            audio: false,
+          });
+          mediaStreamRef.current = altStream;
+          setCameraFacing("user");
+          setStreamError("Back camera unavailable, switched to front camera.");
+          if (videoRef.current) {
+            videoRef.current.srcObject = altStream;
+            try { await videoRef.current.play(); } catch {}
+          }
+          setTimeout(() => setVideoReady(Boolean(videoRef.current && (videoRef.current.videoWidth || 0) > 0)), 200);
+          return;
+        } catch {}
+      }
+      // Final fallback: let the browser choose
+      try {
+        const anyStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+        mediaStreamRef.current = anyStream;
+        setStreamError("Using default camera.");
+        if (videoRef.current) {
+          videoRef.current.srcObject = anyStream;
+          try { await videoRef.current.play(); } catch {}
+        }
+        setTimeout(() => setVideoReady(Boolean(videoRef.current && (videoRef.current.videoWidth || 0) > 0)), 200);
+      } catch (e3: any) {
+        setStreamError(e3?.message || "Unable to access camera");
+        setVideoReady(false);
+      }
     }
-  }, []);
+  }, [cameraFacing]);
 
   const stopVideo = useCallback(() => {
     const ms = mediaStreamRef.current;
@@ -194,7 +242,7 @@ export default function MintPage() {
 
   const beginCapture = useCallback(async () => {
     setError(null);
-    setStep("permissions");
+    // Request sensors first
     try {
       // Request Geolocation
       const id = navigator.geolocation.watchPosition(
@@ -207,9 +255,9 @@ export default function MintPage() {
     // Orientation
     await requestOrientationPermissionIfNeeded();
     window.addEventListener("deviceorientation", onDeviceOrientation as any, true);
-    // Camera
-    await startVideo();
+    // Move to capture first so <video> mounts, then start camera
     setStep("capture");
+    setTimeout(() => { void startVideo(); }, 0);
   }, [onDeviceOrientation, startVideo]);
 
   const handleSnap = useCallback(() => {
@@ -217,8 +265,12 @@ export default function MintPage() {
     const video = videoRef.current;
     const canvas = canvasRef.current;
     if (!video || !canvas) return;
-    const w = video.videoWidth || 1280;
-    const h = video.videoHeight || 720;
+    if ((video.videoWidth || 0) === 0 || (video.videoHeight || 0) === 0){
+      setError("Camera not ready yet. Please wait a moment and try again.");
+      return;
+    }
+    const w = video.videoWidth;
+    const h = video.videoHeight;
     canvas.width = w;
     canvas.height = h;
     const ctx = canvas.getContext("2d");
@@ -229,6 +281,79 @@ export default function MintPage() {
     // Keep the camera running but move to form step
     setStep("form");
   }, []);
+
+  // Ensure stream starts when entering capture step (in case previous start failed)
+  useEffect(()=>{
+    if(step === "capture"){
+      const v = videoRef.current as HTMLVideoElement | null;
+      const src = mediaStreamRef.current;
+      if(!src){
+        void startVideo();
+      } else if (v) {
+        if (v.srcObject !== src) v.srcObject = src;
+        try { v.play(); } catch {}
+        if(v.videoWidth === 0 || v.videoHeight === 0){
+          v.onloadedmetadata = () => setVideoReady((v.videoWidth||0) > 0 && (v.videoHeight||0) > 0);
+        } else {
+          setVideoReady(true);
+        }
+      }
+    }
+  }, [step, startVideo]);
+
+  const attemptAttachOrStart = useCallback(async () => {
+    const v = videoRef.current;
+    const ms = mediaStreamRef.current;
+    if (v && ms) {
+      if (v.srcObject !== ms) v.srcObject = ms;
+      try { await v.play(); } catch {}
+      setTimeout(() => setVideoReady((v.videoWidth || 0) > 0 && (v.videoHeight || 0) > 0), 200);
+      if ((v.videoWidth || 0) > 0 && (v.videoHeight || 0) > 0) return;
+    }
+    await startVideo();
+  }, [startVideo]);
+
+  // Retry/backoff while waiting for camera readiness
+  useEffect(() => {
+    // Clear timers helper
+    const clearTimers = () => {
+      if (retryTimeoutRef.current) { clearTimeout(retryTimeoutRef.current); retryTimeoutRef.current = null; }
+      if (countdownIntervalRef.current) { clearInterval(countdownIntervalRef.current); countdownIntervalRef.current = null; }
+      setNextRetryIn(null);
+    };
+
+    if (step !== "capture" || videoReady) {
+      clearTimers();
+      return;
+    }
+
+    const delay = Math.min(8000, 1500 * Math.pow(2, retryAttempt));
+    let remaining = Math.ceil(delay / 1000);
+    setNextRetryIn(remaining);
+    countdownIntervalRef.current = window.setInterval(() => {
+      remaining -= 1;
+      setNextRetryIn(Math.max(0, remaining));
+      if (remaining <= 0 && countdownIntervalRef.current) {
+        clearInterval(countdownIntervalRef.current);
+        countdownIntervalRef.current = null;
+      }
+    }, 1000);
+    retryTimeoutRef.current = window.setTimeout(async () => {
+      await attemptAttachOrStart();
+      setRetryAttempt((a) => a + 1);
+    }, delay);
+
+    return () => clearTimers();
+  }, [step, videoReady, retryAttempt, attemptAttachOrStart]);
+
+  const flipCamera = useCallback(async () => {
+    const next = cameraFacing === "environment" ? "user" : "environment";
+    setCameraFacing(next);
+    setVideoReady(false);
+    stopVideo();
+    await startVideo(next);
+    setRetryAttempt(0);
+  }, [cameraFacing, startVideo, stopVideo]);
 
   const handleBackToCapture = useCallback(() => {
     setStep("capture");
@@ -512,11 +637,11 @@ export default function MintPage() {
 
         {/* Step 2 ->  Capture Interface */}
         {step === "capture" && (
-          <div className="fixed inset-0 z-40 flex items-center justify-center p-4">
+          <div className="fixed inset-x-0 top-20 md:top-24 bottom-0 z-40 flex items-center justify-center p-4 ">
             <div className="absolute inset-0 backdrop-blur-md bg-black/40" />
             <div className="relative w-full max-w-5xl rounded-2xl overflow-hidden border border-[var(--surface-glass-border)] bg-black/60">
               <div className="relative aspect-video bg-black">
-                <video ref={videoRef} playsInline muted className="w-full h-full object-contain" onCanPlay={() => setVideoReady(true)} />
+                <video ref={videoRef} playsInline muted autoPlay className="w-full h-full object-contain" onLoadedMetadata={() => setVideoReady(true)} onCanPlay={() => setVideoReady(true)} />
                 {/* HUD overlay */}
                 <div className="absolute inset-0 pointer-events-none">
                   {/* Frame guide */}
@@ -530,11 +655,33 @@ export default function MintPage() {
                     <div>Heading: {prettyHeading(sensors.heading)}</div>
                   </div>
                 </div>
+                {/* Retry/Backoff overlay when camera isn't ready */}
+                {!videoReady && (
+                  <div className="absolute inset-0 flex items-center justify-center bg-black/50 pointer-events-auto">
+                    <div className="text-center space-y-3">
+                      <div className="mx-auto w-10 h-10 border-4 border-emerald-400/60 border-t-transparent rounded-full animate-spin" />
+                      <div className="text-sm text-neutral-200">Starting camera…</div>
+                      {typeof nextRetryIn === "number" && (
+                        <div className="text-xs text-neutral-400">Retrying in {nextRetryIn}s</div>
+                      )}
+                      {streamError && <div className="text-xs text-red-400">{streamError}</div>}
+                      <div className="flex gap-2 justify-center">
+                        <button className="btn-secondary px-3 py-1" onClick={() => { setRetryAttempt(0); void attemptAttachOrStart(); }}>Retry now</button>
+                        <button className="btn-secondary px-3 py-1" onClick={() => { void flipCamera(); }}>Flip camera</button>
+                      </div>
+                    </div>
+                  </div>
+                )}
               </div>
               <div className="flex items-center justify-between p-4 bg-[var(--surface-glass)]">
-                <button className="btn-secondary" onClick={() => { setStep("intro"); stopVideo(); clearSensors(); }}>
-                  Back
-                </button>
+                <div className="flex items-center gap-2">
+                  <button className="btn-secondary" onClick={() => { setStep("intro"); stopVideo(); clearSensors(); }}>
+                    Back
+                  </button>
+                  <button className="btn-secondary" onClick={() => void flipCamera()}>
+                    Flip
+                  </button>
+                </div>
                 <button
                   className={classNames(
                     "px-6 py-3 rounded-full text-black font-semibold",

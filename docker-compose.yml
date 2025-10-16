@@ -18,6 +18,7 @@ services:
     restart: unless-stopped
     depends_on:
       - backend
+      - ai-service
 
   backend:
     build: ./backend
@@ -36,9 +37,25 @@ services:
       - RESEND_API_KEY=${RESEND_API_KEY}
       - EMAIL_FROM=${EMAIL_FROM:-onboarding@resend.dev}
       - RESEND_SANDBOX_FALLBACK=true
+      - AI_BASE_URL=http://miko_ai:8000
     ports:
       - "5001:5001"
     volumes:
       - ./backend:/app
     command: sh -c "npm install --no-audit --no-fund && node src/index.js"
+    restart: unless-stopped
+
+  ai-service:
+    build: ./ai-service
+    container_name: miko_ai
+    environment:
+      - MONGO_URI=${DATABASE_URL}
+      - MONGO_DB=${DATABASE_NAME:-miko}
+      - MONGO_COLLECTION=trees
+      - RADIUS_METERS=20
+      - PHASH_MAX_HAMMING=5
+      - VECTOR_MIN_COSINE=0.95
+      - TREE_CONFIDENCE_MIN=0.5
+    ports:
+      - "8000:8000"
     restart: unless-stopped

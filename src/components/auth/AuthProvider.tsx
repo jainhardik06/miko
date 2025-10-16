@@ -2,7 +2,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import { fetchCurrentUser, sendLogout } from '../../lib/authClient';
 
-type AuthRole = 'INDIVIDUAL' | 'CORPORATE';
+type AuthRole = 'INDIVIDUAL' | 'CORPORATE' | 'VALIDATOR' | 'ADMIN';
 
 export interface AuthenticatedUser {
   id: string;

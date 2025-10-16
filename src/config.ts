@@ -3,3 +3,9 @@
 // Example: export const MODULE_ADDRESS = process.env.NEXT_PUBLIC_MODULE_ADDRESS as string;
 // For now we default to a placeholder admin address (update after publishing Move package).
 export const MODULE_ADDRESS = process.env.NEXT_PUBLIC_MIKO_ADDRESS || '0xADMINPLACEHOLDER';
+
+export function getConfig(){
+	return {
+		apiOrigin: process.env.NEXT_PUBLIC_API_ORIGIN || 'http://localhost:5001'
+	} as const;
+}
