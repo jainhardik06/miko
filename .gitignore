@@ -42,6 +42,8 @@ yarn-error.log*
 # allow example templates to be committed
 !.env.example
 !**/.env.example
+# Ignore root example env file locally (user preference)
+/.env.example
 
 # vercel
 .vercel
