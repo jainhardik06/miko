@@ -22,13 +22,17 @@ app = FastAPI(title="Miko AI Verification Service")
 RADIUS_METERS = float(os.getenv('RADIUS_METERS', '20'))
 PHASH_MAX_HAMMING = int(os.getenv('PHASH_MAX_HAMMING', '5'))
 VECTOR_MIN_COSINE = float(os.getenv('VECTOR_MIN_COSINE', '0.95'))
-TREE_CONFIDENCE_MIN = float(os.getenv('TREE_CONFIDENCE_MIN', '0.5'))
+TREE_CONFIDENCE_MIN = float(os.getenv('TREE_CONFIDENCE_MIN', '0.7'))
+MIN_BLUR_SCORE = float(os.getenv('MIN_BLUR_SCORE', '0.08'))
+MIN_VEG_RATIO = float(os.getenv('MIN_VEG_RATIO', '0.12'))
 CLUSTER_MAX_IN_RADIUS = int(os.getenv('CLUSTER_MAX_IN_RADIUS', '5'))
 
 THRESHOLDS = Thresholds(
     phash_max_hamming=PHASH_MAX_HAMMING,
     vector_min_cosine=VECTOR_MIN_COSINE,
-    tree_confidence_min=TREE_CONFIDENCE_MIN
+    tree_confidence_min=TREE_CONFIDENCE_MIN,
+    min_blur_score=MIN_BLUR_SCORE,
+    min_veg_ratio=MIN_VEG_RATIO
 )
 
 repo = MongoRepo()
@@ -66,12 +70,28 @@ async def verify_tree(
     img = read_image_from_bytes(data)
 
     # Step 1: Tree present check
-    tree_ok, tree_score = is_tree_like(img, THRESHOLDS)
+    tree_ok, tree_score, tree_info = is_tree_like(img, THRESHOLDS)
     if not tree_ok:
+        reason = "Tree not detected"
+        # Map internal reasons to user-friendly ones
+        if tree_info.get("reason") == "too_small":
+            reason = "Image too small for reliable detection"
+        elif tree_info.get("reason") == "blur_low":
+            reason = "Photo too blurry"
+        elif tree_info.get("reason") == "face_detected":
+            reason = "Face detected in frame; please capture the tree"
+        elif isinstance(tree_info.get("reasons"), list):
+            if "low_tree_prob" in tree_info["reasons"]:
+                reason = "No tree detected with sufficient confidence"
+            elif "low_vegetation" in tree_info["reasons"]:
+                reason = "Not enough vegetation signal"
         return JSONResponse(status_code=422, content={
             "status": "REJECTED",
-            "reason": "No tree detected with sufficient confidence",
-            "details": {"tree_score": tree_score}
+            "reason": reason,
+            "details": {
+                "tree_score": tree_score,
+                **tree_info
+            }
         })
 
     # Compute new image features
@@ -173,12 +193,24 @@ async def verify_tree_multi(
             raise HTTPException(status_code=400, detail="All files must be images")
         data = await up.read()
         img = read_image_from_bytes(data)
-        ok, score = is_tree_like(img, THRESHOLDS)
+        ok, score, info = is_tree_like(img, THRESHOLDS)
         if not ok:
+            reason = "A view lacks a detectable tree"
+            if info.get("reason") == "blur_low":
+                reason = "A view is too blurry"
+            elif info.get("reason") == "too_small":
+                reason = "A view is too small"
+            elif info.get("reason") == "face_detected":
+                reason = "A view contains a face; please capture only the tree"
+            elif isinstance(info.get("reasons"), list):
+                if "low_tree_prob" in info["reasons"]:
+                    reason = "A view lacks a tree with sufficient confidence"
+                elif "low_vegetation" in info["reasons"]:
+                    reason = "A view lacks vegetation signal"
             return JSONResponse(status_code=422, content={
                 "status": "REJECTED",
-                "reason": "A view lacks a tree with sufficient confidence",
-                "details": {"min_tree_score": score}
+                "reason": reason,
+                "details": {"min_tree_score": score, **info}
             })
         imgs.append(img)
         tree_scores.append(score)

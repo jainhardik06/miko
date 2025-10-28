@@ -1,0 +1,15 @@
+{
+  "schema": "miko.tree-request@v1",
+  "capturedAt": 1761157808514,
+  "location": {
+    "lat": 27.5939328,
+    "lon": 76.611584
+  },
+  "form": {
+    "name": "hii",
+    "speciesCommon": "Bamboo",
+    "speciesScientific": "Bambusa balcooa"
+  },
+  "estimateCCT": 8,
+  "image": "http://localhost:5001/uploads/images/img-1761158566591-2e3b3a3fa7171b32.jpg"
+}

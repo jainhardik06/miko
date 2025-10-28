@@ -175,6 +175,50 @@ Remove-Item -Recurse -Force node_modules,.next,package-lock.json
 npm install
 ```
 
+### Configure Move module address (critical)
+By default the frontend points to a placeholder address `0xADMINPLACEHOLDER`, which will cause wallet simulation errors like "Hex characters are invalid". After you publish the Move package, set your package address for the frontend:
+
+1. Publish the package to devnet/testnet and note the package address shown by the CLI (the account address the package was published under).
+2. Create a `.env.local` in the project root with:
+
+```
+NEXT_PUBLIC_MIKO_ADDRESS=0x<your_package_address>
+NEXT_PUBLIC_API_ORIGIN=http://localhost:5001
+```
+
+3. Restart `npm run dev` so the env is picked up. The wallet prompt should now show `0x<your_package_address>::tree_requests::submit` and simulation will proceed.
+
+## IPFS Uploads via Pinata (Images + Metadata)
+This repo includes secure server-side endpoints to pin files and JSON to IPFS using Pinata.
+
+Backend endpoints (Express):
+- `POST /api/ipfs/upload` – multipart/form-data with `file` field. Returns `{ cid, ipfsUri, gatewayUrl }`.
+- `POST /api/ipfs/upload-json` – JSON body `{ data, name? }`. Returns `{ cid, ipfsUri, gatewayUrl }`.
+- `POST /api/ipfs/upload-bundle` – JSON body `{ imageDataUrl?, metadata? }` to convert a browser data URL to a file, pin it, and pin the metadata JSON that references it.
+
+Frontend helpers are available in `src/lib/api/ipfs.ts`:
+- `uploadFileToIPFS(file, name?)`
+- `uploadJSONToIPFS(data, name?)`
+- `uploadImageDataUrlBundle(imageDataUrl, metadata)`
+
+Configure credentials in `backend/.env` (do NOT commit secrets):
+```
+# Prefer a scoped JWT from Pinata (recommended)
+PINATA_JWT=... 
+
+# Or API key + secret
+# PINATA_API_KEY=...
+# PINATA_SECRET_API_KEY=...
+
+# Optional custom gateway base
+# PINATA_GATEWAY_BASE=https://gateway.pinata.cloud/ipfs
+```
+
+Notes:
+- Keep Pinata secrets server-side only. Never expose them via `NEXT_PUBLIC_*`.
+- Frontend should POST files to the backend; the backend talks to Pinata and returns a CID.
+- You can then include `ipfs://<cid>` in your on-chain metadata or app state.
+
 ## Database Setup (MongoDB Atlas)
 1. Provision a free MongoDB Atlas cluster (or reuse an existing cluster).
 2. Create a database user with access to your target database (recommended name: `miko`).

@@ -3,8 +3,9 @@ name = "Miko"
 version = "0.0.1"
 
 [addresses]
-miko =  "0xA550C18" # placeholder publish address
-admin = "0xA550C18"
+miko =  "0x6a6677bb2559869550af7ddf5303810731f4846a29bb3d0423d3ff1a26d78876"
+admin = "0x6a6677bb2559869550af7ddf5303810731f4846a29bb3d0423d3ff1a26d78876"
 
 [dependencies]
 AptosFramework = { git = "https://github.com/aptos-labs/aptos-core.git", subdir = "aptos-move/framework/aptos-framework", rev = "main" }
+

@@ -1,8 +1,10 @@
 "use client";
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { MODULE_ADDRESS } from "@/config";
+import { MODULE_ADDRESS, getConfig } from "@/config";
 import { connectPetra } from "@/lib/petra";
+import { verifyTree, type VerifyResult, VerifyApiError } from "@/lib/api/verify";
+import { SPECIES_LIST } from "@/lib/speciesData";
 
 type Step =
   | "intro"
@@ -16,13 +18,15 @@ type Step =
 
 type TreeForm = {
   name: string;
-  species: string;
+  species: string; // common name
+  speciesScientific?: string; // scientific name
   otherSpecies?: string;
   age?: number | "";
   diseases?: string;
   heightM?: number | "";
   girthCm?: number | "";
   details?: string;
+  diseaseEntries: Array<{ id: string; name: string; appearance: string; photoDataUrl?: string }>
 };
 
 type LiveSensors = {
@@ -43,6 +47,71 @@ function toHexUtf8(input: string) {
 function toBase64Utf8(input: string) {
   // Handles UTF-8 properly in browser
   return btoa(unescape(encodeURIComponent(input)));
+}
+
+function isValidHexAddress(addr: string) {
+  // Accept addresses like 0x1, 0xa550c18, or full-length. Petra/Aptos SDK will normalize, but
+  // the wallet simulator requires only hex characters after 0x. We'll also ensure even length.
+  if (typeof addr !== "string") return false;
+  if (!addr.startsWith("0x")) return false;
+  const hex = addr.slice(2);
+  if (!/^[0-9a-fA-F]*$/.test(hex)) return false;
+  return hex.length > 0; // do not enforce even here; SDK pads if needed
+}
+
+// Minimal helper to read APT balance (in octas) for the connected account so we can cap gas below balance
+async function fetchAptBalanceOctas(address: string): Promise<bigint | null> {
+  try {
+    const net = (process.env.NEXT_PUBLIC_APTOS_NETWORK || 'devnet').toLowerCase();
+    const base = net.includes('main')
+      ? 'https://fullnode.mainnet.aptoslabs.com'
+      : net.includes('test')
+        ? 'https://fullnode.testnet.aptoslabs.com'
+        : 'https://fullnode.devnet.aptoslabs.com';
+    const type = encodeURIComponent('0x1::coin::CoinStore<0x1::aptos_coin::AptosCoin>');
+    const resp = await fetch(`${base}/v1/accounts/${address}/resource/${type}`, { cache: 'no-store' });
+    if (!resp.ok) return null;
+    const json = await resp.json();
+    const val = json?.data?.coin?.value;
+    if (val == null) return null;
+    return BigInt(String(val));
+  } catch {
+    return null;
+  }
+}
+
+function getFullnodeBase(): string {
+  const net = (process.env.NEXT_PUBLIC_APTOS_NETWORK || 'devnet').toLowerCase();
+  if (net.includes('main')) return 'https://fullnode.mainnet.aptoslabs.com';
+  if (net.includes('test')) return 'https://fullnode.testnet.aptoslabs.com';
+  return 'https://fullnode.devnet.aptoslabs.com';
+}
+
+// Preflight: verify contract resources exist under the admin/module address. Returns an error message if any missing.
+async function checkContractInitialized(adminAddr: string): Promise<string | null> {
+  try {
+    const base = getFullnodeBase();
+    const types = [
+      `${MODULE_ADDRESS}::roles::Roles`,
+      `${MODULE_ADDRESS}::cct::MintCap`,
+      `${MODULE_ADDRESS}::tree_nft::Trees`,
+      `${MODULE_ADDRESS}::tree_requests::Requests`,
+      `${MODULE_ADDRESS}::marketplace::Registry`,
+    ];
+    const missing: string[] = [];
+    for (const t of types) {
+      const url = `${base}/v1/accounts/${adminAddr}/resource/${encodeURIComponent(t)}`;
+      const resp = await fetch(url, { cache: 'no-store' });
+      if (!resp.ok) missing.push(t);
+    }
+    if (missing.length) {
+      return `Contract not initialized. Missing resources: ${missing.join(', ')}. Ask the admin (${adminAddr}) to run init: roles::init, cct::init, tree_nft::init, tree_requests::init, marketplace::init(fee_bps).`;
+    }
+    return null;
+  } catch {
+    // On network error, skip blocking but allow proceeding (wallet may still succeed)
+    return null;
+  }
 }
 
 function prettyHeading(deg?: number) {
@@ -79,7 +148,9 @@ export default function MintPage() {
   const [sensors, setSensors] = useState<LiveSensors>({});
   const [watchId, setWatchId] = useState<number | null>(null);
   const [capturedDataUrl, setCapturedDataUrl] = useState<string | null>(null);
-  const [form, setForm] = useState<TreeForm>({ name: "", species: "", otherSpecies: "", age: "", heightM: "", girthCm: "", diseases: "", details: "" });
+  const [verifyStatus, setVerifyStatus] = useState<null | { state: 'idle'|'running'|'passed'|'rejected'|'flagged'; message?: string }>(null);
+  const [verifyDetails, setVerifyDetails] = useState<VerifyResult | null>(null);
+  const [form, setForm] = useState<TreeForm>({ name: "", species: "", speciesScientific: "", otherSpecies: "", age: "", heightM: "", girthCm: "", diseases: "", details: "", diseaseEntries: [] });
   const [estimate, setEstimate] = useState<number | null>(null);
   const [txHash, setTxHash] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -90,20 +161,10 @@ export default function MintPage() {
   const retryTimeoutRef = useRef<number | null>(null);
   const countdownIntervalRef = useRef<number | null>(null);
 
-  const speciesOptions = useMemo(
-    () => [
-      "Banyan",
-      "Neem",
-      "Peepal",
-      "Teak",
-      "Mango",
-      "Coconut",
-      "Eucalyptus",
-      "Acacia",
-      "Other",
-    ],
-    []
-  );
+  const speciesCommonOptions = useMemo(() =>
+    [...SPECIES_LIST].sort((a,b)=> a.commonName.localeCompare(b.commonName)), []);
+  const speciesScientificOptions = useMemo(() =>
+    [...SPECIES_LIST].sort((a,b)=> a.scientificName.localeCompare(b.scientificName)), []);
 
   // Clean up media stream on unmount
   useEffect(() => {
@@ -278,8 +339,9 @@ export default function MintPage() {
     ctx.drawImage(video, 0, 0, w, h);
     const dataUrl = canvas.toDataURL("image/jpeg", 0.85);
     setCapturedDataUrl(dataUrl);
-    // Keep the camera running but move to form step
+    // Move to form step (gated by AI verify which runs immediately)
     setStep("form");
+    setVerifyStatus({ state: 'running' });
   }, []);
 
   // Ensure stream starts when entering capture step (in case previous start failed)
@@ -359,8 +421,47 @@ export default function MintPage() {
     setStep("capture");
   }, []);
 
+  // Temporary: allow skipping AI verification to unblock the flow during development
+  const skipVerification = useCallback(() => {
+    setVerifyStatus({ state: 'passed', message: 'AI verification skipped' });
+    setVerifyDetails({ status: 'PASSED', reason: 'skipped', degraded: true });
+  }, []);
+
   const handleFormChange = useCallback(<K extends keyof TreeForm>(key: K, value: TreeForm[K]) => {
     setForm((f) => ({ ...f, [key]: value }));
+  }, []);
+
+  // Sync species dropdowns
+  const handleSelectCommon = useCallback((common: string) => {
+    const match = SPECIES_LIST.find(s => s.commonName === common);
+    setForm(f => ({ ...f, species: common, speciesScientific: match?.scientificName || "" }));
+  }, []);
+  const handleSelectScientific = useCallback((scientific: string) => {
+    const match = SPECIES_LIST.find(s => s.scientificName === scientific);
+    setForm(f => ({ ...f, species: match?.commonName || "", speciesScientific: scientific }));
+  }, []);
+
+  // Disease inner form helpers
+  const addDiseaseEntry = useCallback(() => {
+    setForm(f => ({ ...f, diseaseEntries: [...f.diseaseEntries, { id: String(Date.now())+Math.random().toString(36).slice(2,7), name: "", appearance: "" }] }));
+  }, []);
+  const removeDiseaseEntry = useCallback((id: string) => {
+    setForm(f => ({ ...f, diseaseEntries: f.diseaseEntries.filter(d => d.id !== id) }));
+  }, []);
+  const updateDiseaseField = useCallback((id: string, field: 'name'|'appearance', value: string) => {
+    setForm(f => ({ ...f, diseaseEntries: f.diseaseEntries.map(d => d.id===id ? { ...d, [field]: value } : d) }));
+  }, []);
+  const updateDiseasePhoto = useCallback((id: string, file?: File) => {
+    if(!file){
+      setForm(f => ({ ...f, diseaseEntries: f.diseaseEntries.map(d => d.id===id ? { ...d, photoDataUrl: undefined } : d) }));
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => {
+      const dataUrl = String(reader.result || '');
+      setForm(f => ({ ...f, diseaseEntries: f.diseaseEntries.map(d => d.id===id ? { ...d, photoDataUrl: dataUrl } : d) }));
+    };
+    reader.readAsDataURL(file);
   }, []);
 
   const proceedProcessing = useCallback(() => {
@@ -369,49 +470,86 @@ export default function MintPage() {
     // We no longer need camera/sensors during analysis
     stopVideo();
     clearSensors();
-    // Fake analysis delay, compute simple heuristic estimate
+    // Fake analysis delay, compute conservative heuristic estimate
     const h = Number(form.heightM || 0);
     const g = Number(form.girthCm || 0);
     const a = Number(form.age || 0);
-    // simple model: growth factor from height and girth, boosted by maturity; clamp
-    const est = Math.max(1, Math.min(500, Math.round(0.3 * h * (g / 50 + 1) + 0.1 * a)));
+    // If measurements are missing, fall back to a small baseline so users don't see huge numbers by mistake
+    let est: number;
+    if (h <= 0 || g <= 0) {
+      // baseline from age only (very conservative)
+      est = Math.max(1, Math.min(40, Math.round(0.02 * a + 8)));
+    } else {
+      // modest biomass proxy; keep a tight cap to prevent unrealistic spikes
+      const biomass = h * (g / 100); // meters * meters (~area proxy)
+      est = Math.max(1, Math.min(200, Math.round(8 * biomass + 0.02 * a)));
+    }
     setTimeout(() => {
       setEstimate(est);
       setStep("confirm");
     }, 1400);
   }, [clearSensors, form.age, form.girthCm, form.heightM, stopVideo]);
 
-  const metadataJson = useMemo(() => {
+  const metadataObject = useMemo(() => {
     const payload = {
       schema: "miko.tree-request@v1",
       capturedAt: Date.now(),
       location: sensors.lat && sensors.lon ? { lat: sensors.lat, lon: sensors.lon } : undefined,
       heading: sensors.heading,
-      photo: capturedDataUrl,
+      // NOTE: image will be uploaded off-chain; we link its URL in backend response
       form: {
         name: form.name,
-        species: form.species === "Other" ? form.otherSpecies || "Other" : form.species,
+        speciesCommon: form.species === "Other" ? form.otherSpecies || "Other" : form.species,
+        speciesScientific: form.speciesScientific || undefined,
         age: form.age ? Number(form.age) : undefined,
-        diseases: form.diseases || undefined,
+        diseaseNotes: form.diseases || undefined,
+        diseases: (form.diseaseEntries && form.diseaseEntries.length>0) ? form.diseaseEntries.map(d=> ({ name: d.name, appearance: d.appearance, photo: d.photoDataUrl })) : undefined,
         heightM: form.heightM ? Number(form.heightM) : undefined,
         girthCm: form.girthCm ? Number(form.girthCm) : undefined,
         details: form.details || undefined,
       },
       estimateCCT: estimate ?? undefined,
     } as const;
-    return JSON.stringify(payload);
-  }, [capturedDataUrl, estimate, form.age, form.details, form.diseases, form.girthCm, form.heightM, form.name, form.otherSpecies, form.species, sensors.heading, sensors.lat, sensors.lon]);
+    return payload;
+  }, [estimate, form.age, form.details, form.diseases, form.diseaseEntries, form.girthCm, form.heightM, form.name, form.otherSpecies, form.species, form.speciesScientific, sensors.heading, sensors.lat, sensors.lon]);
 
-  const explorerUrl = useMemo(() => (txHash ? `https://explorer.aptoslabs.com/txn/${txHash}?network=devnet` : null), [txHash]);
+  const explorerUrl = useMemo(() => {
+    const net = (process.env.NEXT_PUBLIC_APTOS_NETWORK || 'devnet').toLowerCase();
+    const n = net.includes('main') ? 'mainnet' : net.includes('test') ? 'testnet' : 'devnet';
+    return txHash ? `https://explorer.aptoslabs.com/txn/${txHash}?network=${n}` : null;
+  }, [txHash]);
 
   const confirmAndMint = useCallback(async () => {
     setError(null);
     setStep("minting");
     try {
+      // Guard: make sure module address is configured; otherwise Petra will throw
+      if (!isValidHexAddress(MODULE_ADDRESS) || MODULE_ADDRESS.includes("ADMINPLACEHOLDER")) {
+        throw new Error(
+          "On-chain module address is not configured. Set NEXT_PUBLIC_MIKO_ADDRESS to your published package address (e.g., 0xabc...)."
+        );
+      }
       const { address } = await connectPetra();
-      // Pack metadata as data URL JSON to satisfy vector<u8> metadata_uri
-      const dataUrl = `data:application/json;base64,${toBase64Utf8(metadataJson)}`;
-      const arg0 = toHexUtf8(dataUrl);
+
+      // Preflight contract initialization (roles/cct/tree_nft/tree_requests/marketplace)
+      const initErr = await checkContractInitialized(MODULE_ADDRESS);
+      if (initErr) {
+        throw new Error(initErr);
+      }
+
+      // Upload image and metadata to backend; get compact metadata URL
+      const api = getConfig().apiOrigin;
+      const uploadResp = await fetch(`${api}/api/storage/upload`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ imageDataUrl: capturedDataUrl, metadata: metadataObject })
+      });
+      if (!uploadResp.ok) throw new Error(`Upload failed (${uploadResp.status})`);
+      const { metadataUrl } = await uploadResp.json();
+      if (!metadataUrl || typeof metadataUrl !== 'string') throw new Error('Upload did not return metadataUrl');
+
+      // Submit only the URL as vector<u8> (UTF-8) to keep tx small
+      const arg0 = toHexUtf8(metadataUrl);
       const payload: any = {
         type: "entry_function_payload",
         function: `${MODULE_ADDRESS}::tree_requests::submit`,
@@ -420,8 +558,62 @@ export default function MintPage() {
       };
       const provider: any = (window as any).petra || (window as any).aptos;
       if (!provider?.signAndSubmitTransaction) throw new Error("Petra wallet not available");
-      const res = await provider.signAndSubmitTransaction(payload);
-      const txh = res?.hash || res?.transactionHash || res?.hashHex || null;
+      // Provide explicit gas options up-front to avoid wallet under-estimating below minimums.
+      // Also cap maxGasAmount to a safe value based on the account's current APT balance to avoid faucet issues.
+      const now = Math.floor(Date.now() / 1000);
+  const GAS_PRICE = BigInt(100); // octas per unit; safe default for dev/test
+  let maxGas = BigInt(200000);   // default ceiling
+
+      // Preflight: cap gas budget by current balance (leave a small reserve)
+      try {
+        const bal = await fetchAptBalanceOctas(address);
+        if (bal != null) {
+          const reserve = BigInt(50000); // keep some dust in the account
+          const affordable = (bal > reserve) ? (bal - reserve) / GAS_PRICE : BigInt(0);
+          // Ensure we don't exceed affordable gas
+          maxGas = affordable > BigInt(0) ? (affordable < maxGas ? affordable : maxGas) : BigInt(0);
+          const MIN_UNITS = BigInt(2000); // network minimum units guard
+          if (maxGas < MIN_UNITS) {
+            throw new Error("Insufficient APT to cover minimum transaction fee. Please top up your Devnet/Testnet APT.");
+          }
+        }
+      } catch (e: any) {
+        // If balance check fails, proceed with defaults; wallet may still succeed if funded
+      }
+
+      const opts: any = {
+        maxGasAmount: String(maxGas),
+        gasUnitPrice: String(GAS_PRICE),
+        expirationTimestampSecs: String(now + 600),
+        // Estimation toggles used by Aptos SDK; set false so our overrides are used
+        estimateGasUnitPrice: false,
+        estimateMaxGasAmount: false,
+        estimatePrioritizedGasUnitPrice: false,
+      };
+      let txRes: any;
+      try {
+        txRes = await provider.signAndSubmitTransaction(payload, opts);
+      } catch (err: any) {
+        // Final fallback: try with a higher max gas amount if balance allows; otherwise surface a clear error
+        const opts2: any = { ...opts };
+        try {
+          const bal = await fetchAptBalanceOctas(address);
+          if (bal != null) {
+            const reserve = BigInt(50000);
+            const affordable = (bal > reserve) ? (bal - reserve) / GAS_PRICE : BigInt(0);
+            const bumped = affordable > BigInt(0) ? affordable : BigInt(0);
+            if (bumped === BigInt(0)) throw new Error("Insufficient APT to cover transaction fee.");
+            opts2.maxGasAmount = String(bumped);
+          } else {
+            // If unknown, bump to a safe upper bound
+            opts2.maxGasAmount = "400000";
+          }
+        } catch (e: any) {
+          throw new Error(e?.message || "Insufficient APT to cover transaction fee.");
+        }
+        txRes = await provider.signAndSubmitTransaction(payload, opts2);
+      }
+  const txh = txRes?.hash || txRes?.transactionHash || txRes?.hashHex || null;
       if (!txh) throw new Error("Wallet did not return a transaction hash");
       setTxHash(txh);
       // Optional: await confirmation
@@ -431,7 +623,7 @@ export default function MintPage() {
       setError(e?.message || "Failed to submit transaction");
       setStep("confirm");
     }
-  }, [metadataJson]);
+  }, [capturedDataUrl, metadataObject]);
 
   const startOver = useCallback(() => {
     setStep("intro");
@@ -441,7 +633,7 @@ export default function MintPage() {
     setEstimate(null);
     setTxHash(null);
     setError(null);
-    setForm({ name: "", species: "", otherSpecies: "", age: "", heightM: "", girthCm: "", diseases: "", details: "" });
+  setForm({ name: "", species: "", speciesScientific: "", otherSpecies: "", age: "", heightM: "", girthCm: "", diseases: "", details: "", diseaseEntries: [] });
   }, [clearSensors, stopVideo]);
 
   const scrollToHowItWorks = useCallback((e?: React.MouseEvent) => {
@@ -602,9 +794,9 @@ export default function MintPage() {
 
         {/* Step 2: Permissions & Instruction */}
         {step === "permissions" && (
-          <div className="fixed inset-0 z-40 flex items-center justify-center p-4">
-            <div className="absolute inset-0 backdrop-blur-md bg-black/40" />
-            <div className="relative glass-card w-full max-w-3xl rounded-2xl border border-[var(--surface-glass-border)] bg-[var(--surface-glass)] p-6">
+          <div className="fixed inset-x-0 top-24 md:top-28 bottom-0 z-40 flex items-start md:items-center justify-center p-4 overflow-y-auto">
+            <div className="absolute inset-0 backdrop-blur-md bg-black/40 pointer-events-none z-0" />
+            <div className="relative z-10 my-4 glass-card w-full max-w-3xl rounded-2xl border border-[var(--surface-glass-border)] bg-[var(--surface-glass)] p-6">
               <h2 className="text-2xl font-semibold mb-2">Capture Your Green Asset</h2>
               <p className="text-neutral-300 mb-6">
                 We’ll request access to your Location, Camera, and Compass to verify your tree’s existence and create a secure digital twin.
@@ -637,9 +829,9 @@ export default function MintPage() {
 
         {/* Step 2 ->  Capture Interface */}
         {step === "capture" && (
-          <div className="fixed inset-x-0 top-20 md:top-24 bottom-0 z-40 flex items-center justify-center p-4 ">
-            <div className="absolute inset-0 backdrop-blur-md bg-black/40" />
-            <div className="relative w-full max-w-5xl rounded-2xl overflow-hidden border border-[var(--surface-glass-border)] bg-black/60">
+          <div className="fixed inset-x-0 top-24 md:top-28 bottom-0 z-40 flex items-center justify-center p-4 overflow-y-auto ">
+            <div className="absolute inset-0 backdrop-blur-md bg-black/40 pointer-events-none z-0" />
+            <div className="relative z-10 w-full max-w-5xl rounded-2xl overflow-hidden border border-[var(--surface-glass-border)] bg-black/60">
               <div className="relative aspect-video bg-black">
                 <video ref={videoRef} playsInline muted autoPlay className="w-full h-full object-contain" onLoadedMetadata={() => setVideoReady(true)} onCanPlay={() => setVideoReady(true)} />
                 {/* HUD overlay */}
@@ -700,9 +892,9 @@ export default function MintPage() {
 
         {/* Step 3: Data Form */}
         {step === "form" && (
-          <div className="fixed inset-0 z-40 flex items-center justify-center p-4">
-            <div className="absolute inset-0 backdrop-blur-md bg-black/40" />
-            <div className="relative glass-card w-full max-w-4xl rounded-2xl border border-[var(--surface-glass-border)] bg-[var(--surface-glass)] p-6">
+          <div className="fixed inset-x-0 top-24 md:top-28 bottom-0 z-40 flex items-start md:items-center justify-center p-4 overflow-y-auto">
+            <div className="absolute inset-0 backdrop-blur-md bg-black/40 pointer-events-none z-0" />
+            <div className="relative z-10 my-4 glass-card w-full max-w-4xl rounded-2xl border border-[var(--surface-glass-border)] bg-[var(--surface-glass)] p-6">
               <h2 className="text-2xl font-semibold mb-4">Describe Your Tree</h2>
               <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
                 <div>
@@ -711,51 +903,129 @@ export default function MintPage() {
                   ) : (
                     <div className="h-56 rounded-lg border border-white/10 bg-black/30 flex items-center justify-center text-neutral-400">No photo</div>
                   )}
+                  {/* Verify status */}
+                  <VerifyGate
+                    dataUrl={capturedDataUrl}
+                    lat={sensors.lat}
+                    lon={sensors.lon}
+                    status={verifyStatus}
+                    onStatusChange={setVerifyStatus}
+                    onResult={setVerifyDetails}
+                    onRetry={() => { setVerifyStatus({ state: 'running' }); }}
+                  />
                 </div>
-                <div className="md:col-span-2 grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <div>
-                    <label className="block text-sm mb-1">Tree Name/Nickname</label>
-                    <input value={form.name} onChange={(e) => handleFormChange("name", e.target.value)} className="w-full bg-transparent border rounded-md px-3 py-2 focus:outline-none focus:border-emerald-400" placeholder="The Old Banyan" />
-                  </div>
-                  <div>
-                    <label className="block text-sm mb-1">Species</label>
-                    <select value={form.species} onChange={(e) => handleFormChange("species", e.target.value)} className="w-full bg-transparent border rounded-md px-3 py-2 focus:outline-none focus:border-emerald-400">
-                      <option value="" disabled hidden>
-                        Select species
-                      </option>
-                      {speciesOptions.map((sp) => (
-                        <option key={sp} value={sp} className="bg-[#0a0d0f]">
-                          {sp}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                  {form.species === "Other" && (
-                    <div className="md:col-span-2">
-                      <label className="block text-sm mb-1">Other Species</label>
-                      <input value={form.otherSpecies} onChange={(e) => handleFormChange("otherSpecies", e.target.value)} className="w-full bg-transparent border rounded-md px-3 py-2 focus:outline-none focus:border-emerald-400" placeholder="Enter species" />
+                <div className="md:col-span-2">
+                  {!(verifyStatus?.state === 'passed' || verifyStatus?.state === 'flagged') ? (
+                    <div className="h-full min-h-56 rounded-lg border border-white/10 bg-black/30 p-4 text-sm text-neutral-300 flex items-center">
+                      {verifyStatus?.state === 'rejected' ? (
+                        <div>
+                          <div className="font-semibold text-red-300">{verifyStatus?.message || 'Photo rejected by AI'}</div>
+                          <div className="text-neutral-400 mt-2">
+                            {renderVerifyHints(verifyDetails)}
+                          </div>
+                          <div className="mt-3 flex gap-2">
+                            <button className="btn-secondary" onClick={() => { setVerifyStatus({ state: 'running' }); }}>Retry verification</button>
+                            <button className="btn-secondary" onClick={skipVerification}>Skip AI check for now</button>
+                          </div>
+                        </div>
+                      ) : (
+                        <div>
+                          <div className="font-semibold">Waiting for AI approval…</div>
+                          <div className="text-neutral-400 mt-1">Once approved, the form will unlock for details.</div>
+                          <div className="mt-3">
+                            <button className="btn-secondary" onClick={skipVerification}>Skip AI check for now</button>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  ) : (
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      <div>
+                        <label className="block text-sm mb-1">Tree Name/Nickname</label>
+                        <input value={form.name} onChange={(e) => handleFormChange("name", e.target.value)} className="w-full bg-transparent border rounded-md px-3 py-2 focus:outline-none focus:border-emerald-400" placeholder="The Old Banyan" />
+                      </div>
+                      <div>
+                        <label className="block text-sm mb-1">Common Name</label>
+                        <div className="relative">
+                          <select value={form.species} onChange={(e)=>handleSelectCommon(e.target.value)} className="w-full appearance-none bg-black/30 border border-white/10 rounded-md px-3 pr-9 py-2 focus:outline-none focus:border-emerald-400 text-neutral-200">
+                            <option value="" disabled hidden>Select common name</option>
+                            {speciesCommonOptions.map((s) => (
+                              <option key={s.id} value={s.commonName} className="bg-[#0a0d0f]">{s.commonName}</option>
+                            ))}
+                          </select>
+                          <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-neutral-400">▾</span>
+                        </div>
+                      </div>
+                      <div>
+                        <label className="block text-sm mb-1">Scientific Name</label>
+                        <div className="relative">
+                          <select value={form.speciesScientific} onChange={(e)=>handleSelectScientific(e.target.value)} className="w-full appearance-none bg-black/30 border border-white/10 rounded-md px-3 pr-9 py-2 focus:outline-none focus:border-emerald-400 text-neutral-200">
+                            <option value="" disabled hidden>Select scientific name</option>
+                            {speciesScientificOptions.map((s) => (
+                              <option key={s.id} value={s.scientificName} className="bg-[#0a0d0f]">{s.scientificName}</option>
+                            ))}
+                          </select>
+                          <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-neutral-400">▾</span>
+                        </div>
+                      </div>
+                      {form.species === "Other" && (
+                        <div className="md:col-span-2">
+                          <label className="block text-sm mb-1">Other Species</label>
+                          <input value={form.otherSpecies} onChange={(e) => handleFormChange("otherSpecies", e.target.value)} className="w-full bg-transparent border rounded-md px-3 py-2 focus:outline-none focus:border-emerald-400" placeholder="Enter species" />
+                        </div>
+                      )}
+                      <div>
+                        <label className="block text-sm mb-1">Estimated Age (years)</label>
+                        <input type="number" value={form.age as any} onChange={(e) => handleFormChange("age", e.target.value === "" ? "" : Number(e.target.value))} className="w-full bg-transparent border rounded-md px-3 py-2 focus:outline-none focus:border-emerald-400" />
+                      </div>
+                      <div>
+                        <label className="block text-sm mb-1">Estimated Height (meters)</label>
+                        <input type="number" value={form.heightM as any} onChange={(e) => handleFormChange("heightM", e.target.value === "" ? "" : Number(e.target.value))} className="w-full bg-transparent border rounded-md px-3 py-2 focus:outline-none focus:border-emerald-400" />
+                      </div>
+                      <div>
+                        <label className="block text-sm mb-1">Trunk Girth (cm)</label>
+                        <input type="number" value={form.girthCm as any} onChange={(e) => handleFormChange("girthCm", e.target.value === "" ? "" : Number(e.target.value))} className="w-full bg-transparent border rounded-md px-3 py-2 focus:outline-none focus:border-emerald-400" />
+                      </div>
+                      <div className="md:col-span-2">
+                        <div className="flex items-center justify-between mb-1">
+                          <label className="block text-sm">Diseases / Conditions (optional)</label>
+                          <button type="button" className="btn-secondary px-3 py-1" onClick={addDiseaseEntry}>Add disease</button>
+                        </div>
+                        {form.diseaseEntries.length === 0 && (
+                          <div className="text-xs text-neutral-400 mb-2">No diseases added.</div>
+                        )}
+                        <div className="space-y-3">
+                          {form.diseaseEntries.map((d) => (
+                            <div key={d.id} className="rounded-md border border-white/10 bg-black/30 p-3">
+                              <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                                <div>
+                                  <label className="block text-xs mb-1">Name</label>
+                                  <input value={d.name} onChange={(e)=>updateDiseaseField(d.id,'name', e.target.value)} className="w-full bg-transparent border rounded-md px-3 py-2 focus:outline-none focus:border-emerald-400" placeholder="e.g., Powdery mildew" />
+                                </div>
+                                <div className="md:col-span-2">
+                                  <label className="block text-xs mb-1">How it looks / notes</label>
+                                  <input value={d.appearance} onChange={(e)=>updateDiseaseField(d.id,'appearance', e.target.value)} className="w-full bg-transparent border rounded-md px-3 py-2 focus:outline-none focus:border-emerald-400" placeholder="White powdery spots on leaves" />
+                                </div>
+                              </div>
+                              <div className="mt-2 flex items-center gap-3">
+                                <input type="file" accept="image/*" onChange={(e)=>updateDiseasePhoto(d.id, e.target.files?.[0])} />
+                                {d.photoDataUrl && <img src={d.photoDataUrl} alt="disease" className="h-16 w-16 object-cover rounded border border-white/10" />}
+                                <button type="button" className="btn-secondary ml-auto" onClick={()=>removeDiseaseEntry(d.id)}>Remove</button>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                        <div className="mt-3">
+                          <label className="block text-xs mb-1">General disease notes</label>
+                          <textarea value={form.diseases} onChange={(e) => handleFormChange("diseases", e.target.value)} className="w-full bg-transparent border rounded-md px-3 py-2 focus:outline-none focus:border-emerald-400" rows={2} />
+                        </div>
+                      </div>
+                      <div className="md:col-span-2">
+                        <label className="block text-sm mb-1">Additional Details</label>
+                        <textarea value={form.details} onChange={(e) => handleFormChange("details", e.target.value)} className="w-full bg-transparent border rounded-md px-3 py-2 focus:outline-none focus:border-emerald-400" rows={3} />
+                      </div>
                     </div>
                   )}
-                  <div>
-                    <label className="block text-sm mb-1">Estimated Age (years)</label>
-                    <input type="number" value={form.age as any} onChange={(e) => handleFormChange("age", e.target.value === "" ? "" : Number(e.target.value))} className="w-full bg-transparent border rounded-md px-3 py-2 focus:outline-none focus:border-emerald-400" />
-                  </div>
-                  <div>
-                    <label className="block text-sm mb-1">Estimated Height (meters)</label>
-                    <input type="number" value={form.heightM as any} onChange={(e) => handleFormChange("heightM", e.target.value === "" ? "" : Number(e.target.value))} className="w-full bg-transparent border rounded-md px-3 py-2 focus:outline-none focus:border-emerald-400" />
-                  </div>
-                  <div>
-                    <label className="block text-sm mb-1">Trunk Girth (cm)</label>
-                    <input type="number" value={form.girthCm as any} onChange={(e) => handleFormChange("girthCm", e.target.value === "" ? "" : Number(e.target.value))} className="w-full bg-transparent border rounded-md px-3 py-2 focus:outline-none focus:border-emerald-400" />
-                  </div>
-                  <div className="md:col-span-2">
-                    <label className="block text-sm mb-1">Known Diseases or Conditions (optional)</label>
-                    <textarea value={form.diseases} onChange={(e) => handleFormChange("diseases", e.target.value)} className="w-full bg-transparent border rounded-md px-3 py-2 focus:outline-none focus:border-emerald-400" rows={2} />
-                  </div>
-                  <div className="md:col-span-2">
-                    <label className="block text-sm mb-1">Additional Details</label>
-                    <textarea value={form.details} onChange={(e) => handleFormChange("details", e.target.value)} className="w-full bg-transparent border rounded-md px-3 py-2 focus:outline-none focus:border-emerald-400" rows={3} />
-                  </div>
                 </div>
               </div>
               <div className="mt-6 flex items-center justify-between">
@@ -765,10 +1035,20 @@ export default function MintPage() {
                 <button
                   className={classNames(
                     "btn-primary",
-                    (!form.name || !form.species || (form.species === "Other" && !form.otherSpecies)) && "opacity-60 cursor-not-allowed"
+                    (
+                      !form.name ||
+                      !form.species ||
+                      (form.species === "Other" && !form.otherSpecies) ||
+                      (verifyStatus?.state !== 'passed' && verifyStatus?.state !== 'flagged')
+                    ) && "opacity-60 cursor-not-allowed"
                   )}
                   onClick={proceedProcessing}
-                  disabled={!form.name || !form.species || (form.species === "Other" && !form.otherSpecies)}
+                  disabled={
+                    !form.name ||
+                    !form.species ||
+                    (form.species === "Other" && !form.otherSpecies) ||
+                    (verifyStatus?.state !== 'passed' && verifyStatus?.state !== 'flagged')
+                  }
                 >
                   Proceed
                 </button>
@@ -779,9 +1059,9 @@ export default function MintPage() {
 
         {/* Step 4: Processing + Confirmation */}
         {(step === "processing" || step === "confirm") && (
-          <div className="fixed inset-0 z-40 flex items-center justify-center p-4">
-            <div className="absolute inset-0 backdrop-blur-md bg-black/40" />
-            <div className="relative glass-card w-full max-w-3xl rounded-2xl border border-[var(--surface-glass-border)] bg-[var(--surface-glass)] p-6">
+          <div className="fixed inset-x-0 top-24 md:top-28 bottom-0 z-40 flex items-start md:items-center justify-center p-4 overflow-y-auto">
+            <div className="absolute inset-0 backdrop-blur-md bg-black/40 pointer-events-none z-0" />
+            <div className="relative z-10 my-4 glass-card w-full max-w-3xl rounded-2xl border border-[var(--surface-glass-border)] bg-[var(--surface-glass)] p-6">
               {step === "processing" && (
                 <div className="text-center">
                   <h3 className="text-xl font-semibold mb-2">Analyzing Your Asset...</h3>
@@ -810,9 +1090,9 @@ export default function MintPage() {
 
         {/* Step 5: Minting & Success */}
         {(step === "minting" || step === "success") && (
-          <div className="fixed inset-0 z-40 flex items-center justify-center p-4">
-            <div className="absolute inset-0 backdrop-blur-md bg-black/40" />
-            <div className="relative glass-card w-full max-w-3xl rounded-2xl border border-[var(--surface-glass-border)] bg-[var(--surface-glass)] p-6 text-center">
+          <div className="fixed inset-x-0 top-24 md:top-28 bottom-0 z-40 flex items-start md:items-center justify-center p-4 overflow-y-auto">
+            <div className="absolute inset-0 backdrop-blur-md bg-black/40 pointer-events-none z-0" />
+            <div className="relative z-10 my-4 glass-card w-full max-w-3xl rounded-2xl border border-[var(--surface-glass-border)] bg-[var(--surface-glass)] p-6 text-center">
               {step === "minting" && (
                 <div>
                   <h3 className="text-xl font-semibold mb-2">Minting in Progress...</h3>
@@ -849,3 +1129,154 @@ export default function MintPage() {
     </div>
   );
 }
+
+function dataUrlToFile(dataUrl: string, filename = 'capture.jpg'): File {
+  const arr = dataUrl.split(',');
+  const mimeMatch = arr[0].match(/:(.*?);/);
+  const mime = mimeMatch ? mimeMatch[1] : 'image/jpeg';
+  const bstr = atob(arr[1]);
+  let n = bstr.length;
+  const u8arr = new Uint8Array(n);
+  while (n--) u8arr[n] = bstr.charCodeAt(n);
+  return new File([u8arr], filename, { type: mime });
+}
+
+function VerifyGate({
+  dataUrl,
+  lat,
+  lon,
+  status,
+  onStatusChange,
+  onRetry,
+  onResult,
+}:{
+  dataUrl: string | null;
+  lat?: number;
+  lon?: number;
+  status: { state: 'idle'|'running'|'passed'|'rejected'|'flagged'; message?: string } | null;
+  onStatusChange: (s: { state: 'idle'|'running'|'passed'|'rejected'|'flagged'; message?: string }) => void;
+  onRetry: () => void;
+  onResult: (res: VerifyResult | null) => void;
+}){
+  useEffect(()=>{
+    let cancelled = false;
+    async function run(){
+      if(!dataUrl) return;
+      if(lat==null || lon==null) return; // wait for GPS
+      if(status?.state !== 'running') return;
+      try {
+        const file = dataUrlToFile(dataUrl);
+        const res: VerifyResult = await verifyTree(file, lat, lon);
+        if(cancelled) return;
+        if(res.status === 'PASSED') onStatusChange({ state: 'passed', message: 'AI check passed' });
+        else if(res.status === 'FLAGGED') onStatusChange({ state: 'flagged', message: res.reason || 'AI flagged for review' });
+        else onStatusChange({ state: 'rejected', message: classifyRejectReason(res) });
+        onResult(res);
+      } catch(err:any){
+        if(cancelled) return;
+        // Distinguish backend connectivity/proxy vs AI rejection
+        if(err instanceof VerifyApiError){
+          if(err.status >= 500 || err.status === 0){
+            onStatusChange({ state: 'rejected', message: 'AI service unavailable' });
+            onResult(err.data || null);
+          } else if(err.status === 422){
+            const msg = classifyRejectReason(err.data as VerifyResult | undefined) || 'Photo rejected by AI';
+            onStatusChange({ state: 'rejected', message: msg });
+            onResult(err.data as VerifyResult || null);
+          } else {
+            const msg = (err.data && (err.data.error || err.data.reason)) || err.message;
+            onStatusChange({ state: 'rejected', message: msg || 'Verification failed' });
+            onResult(err.data || null);
+          }
+        } else {
+          onStatusChange({ state: 'rejected', message: 'Network error contacting AI service' });
+          onResult(null);
+        }
+      }
+    }
+    void run();
+    return ()=>{ cancelled = true; };
+  }, [dataUrl, lat, lon, status?.state, onStatusChange]);
+
+  if(!dataUrl){
+    return null;
+  }
+
+  const waitingForGps = (lat==null || lon==null);
+  const state = status?.state || 'idle';
+  return (
+    <div className="mt-3 text-xs">
+      {waitingForGps && (
+        <div className="rounded border border-white/10 bg-black/30 px-2 py-1 text-neutral-300">Waiting for GPS lock… please ensure location is enabled.</div>
+      )}
+      {!waitingForGps && state === 'running' && (
+        <div className="flex items-center gap-2 rounded border border-emerald-400/30 bg-emerald-500/10 px-2 py-1">
+          <div className="w-3 h-3 border-2 border-emerald-400/60 border-t-transparent rounded-full animate-spin" />
+          <div>Verifying photo with AI…</div>
+        </div>
+      )}
+      {!waitingForGps && state === 'passed' && (
+        <div className="rounded border border-emerald-400/40 bg-emerald-500/10 px-2 py-1 text-emerald-300">AI check passed. You can proceed.</div>
+      )}
+      {!waitingForGps && state === 'flagged' && (
+        <div className="rounded border border-yellow-400/40 bg-yellow-500/10 px-2 py-1 text-yellow-300">AI flagged for manual review. You may proceed, but validators will review.</div>
+      )}
+      {!waitingForGps && state === 'rejected' && (
+        <div className="rounded border border-red-400/40 bg-red-500/10 px-2 py-2 text-red-300">
+          {status?.message || 'AI rejected the photo' }
+          <div className="mt-2">
+            <button className="btn-secondary px-2 py-1" onClick={onRetry}>Retry verification</button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function classifyRejectReason(res?: VerifyResult){
+  if(!res) return '';
+  // Direct known reasons from AI service
+  if(res.reason){
+    // Normalize known substrings to friendlier messages
+    const r = res.reason.toLowerCase();
+    if(r.includes('no tree')) return 'No tree detected. Please retake with the full tree in frame and better lighting.';
+    if(r.includes('duplicate by perceptual hash')) return 'Looks like a duplicate photo near this location.';
+    if(r.includes('duplicate by deep visual similarity')) return 'This appears visually identical to an existing tree nearby.';
+    if(r.includes('dense cluster')) return 'This location is very dense with trees; it will need manual review.';
+    if(r.includes('too similar (phash)')) return 'Multiple views are too similar. Capture from different angles.';
+    if(r.includes('unrelated objects')) return 'Views look unrelated to the same object. Ensure photos are of the same tree.';
+  }
+  // Heuristic on metrics
+  if(res.metrics){
+    if(typeof res.metrics.tree_score === 'number' && res.metrics.tree_score < 0.5){
+      return 'Tree not confidently detected. Try framing the full tree and better lighting.';
+    }
+    if(typeof (res.metrics as any).avg_blur === 'number' && (res.metrics as any).avg_blur < 0.2){
+      return 'Photo seems blurry. Hold steady and try again.';
+    }
+  }
+  return res.reason || 'Photo rejected by AI';
+}
+
+function renderVerifyHints(res: VerifyResult | null){
+  if(!res) return (
+    <div>If this persists, try again later or ensure the AI service is running.</div>
+  );
+  const items: string[] = [];
+  if(res.reason){ items.push(res.reason); }
+  if(res.metrics){
+    if(typeof (res.metrics as any).tree_score === 'number') items.push(`Tree score: ${(res.metrics as any).tree_score.toFixed(2)}`);
+    if(typeof (res.metrics as any).phash_hamming === 'number') items.push(`pHash distance: ${(res.metrics as any).phash_hamming}`);
+    if(typeof (res.metrics as any).cosine === 'number') items.push(`Visual similarity: ${(res.metrics as any).cosine.toFixed(3)}`);
+    if(typeof (res.metrics as any).cluster_count === 'number') items.push(`Nearby trees in radius: ${(res.metrics as any).cluster_count}`);
+    if(typeof (res.metrics as any).avg_blur === 'number') items.push(`Blur score: ${(res.metrics as any).avg_blur.toFixed(3)}`);
+    if(typeof (res.metrics as any).avg_ela === 'number') items.push(`ELA score: ${(res.metrics as any).avg_ela.toFixed(3)}`);
+  }
+  if(items.length === 0) return <div>Photo did not pass automated checks. Try reframing with the full tree and better lighting.</div>;
+  return (
+    <ul className="list-disc pl-5 space-y-1">
+      {items.map((t,i)=> <li key={i}>{t}</li>)}
+    </ul>
+  );
+}
+

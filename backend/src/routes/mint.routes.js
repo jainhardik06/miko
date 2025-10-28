@@ -6,7 +6,7 @@ import { requireAuth, requireRole } from '../middleware/auth.js';
 
 const router = Router();
 const upload = multer();
-const AI_BASE_URL = process.env.AI_BASE_URL || 'http://miko_ai:8000';
+const AI_BASE_URL = process.env.AI_BASE_URL || (process.env.DOCKER || process.env.CONTAINER ? 'http://miko_ai:8000' : 'http://localhost:8000');
 
 // Submit mint for verification
 router.post('/submit', requireAuth, upload.single('image'), async (req,res)=>{

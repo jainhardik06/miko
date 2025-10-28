@@ -11,6 +11,7 @@ from loguru import logger
 import torch
 import timm
 from sklearn.metrics.pairwise import cosine_similarity
+import open_clip
 import numpy as np
 import math
 from PIL import ImageChops
@@ -27,7 +28,10 @@ ImageFile.LOAD_TRUNCATED_IMAGES = True
 class Thresholds:
     phash_max_hamming: int = 5
     vector_min_cosine: float = 0.95
-    tree_confidence_min: float = 0.5
+    tree_confidence_min: float = 0.7  # stricter by default
+    min_blur_score: float = 0.08      # require some high-frequency content
+    min_veg_ratio: float = 0.12       # fraction of pixels with green vegetation signal
+    min_clip_margin: float = 0.20     # require positive vs negative prompt margin
 
 
 class Models:
@@ -38,23 +42,26 @@ class Models:
         self.encoder_cfg = timm.data.resolve_data_config(self.encoder.pretrained_cfg)
         self.encoder_tf = timm.data.create_transform(**self.encoder_cfg)
 
-        # Lightweight CLIP text-image zero-shot classification for 'tree'
-        # To avoid extra heavy deps, emulate zero-shot using the encoder features
-        # and a simple linear probe: we approximate by comparing to a tiny set of
-        # positive/negative reference images embedded at startup.
-        logger.info("Preparing zero-shot references for 'tree' check…")
-        self._zs_pos_vec = None
-        self._zs_neg_vec = None
-        self._prepare_zero_shot_refs()
-
-    def _prepare_zero_shot_refs(self):
-        # We craft two synthetic reference images: one greenish texture (tree-like)
-        # and one gray flat texture (non-tree). It's a pragmatic, dependency-free
-        # proxy to gate obvious non-tree submissions.
-        pos = Image.new('RGB', (224, 224), (34, 139, 34))  # forest green block
-        neg = Image.new('RGB', (224, 224), (128, 128, 128))
-        self._zs_pos_vec = self.encode_image(pos)
-        self._zs_neg_vec = self.encode_image(neg)
+        # CLIP zero-shot classification for 'tree' vs negatives
+        logger.info("Loading OpenCLIP (ViT-B-32) for zero-shot checks…")
+        self.clip_model, self.clip_preprocess, _ = open_clip.create_model_and_transforms('ViT-B-32', pretrained='openai')
+        self.clip_model.eval()
+        self.clip_tokenizer = open_clip.get_tokenizer('ViT-B-32')
+        # Pre-tokenize prompts
+        self.clip_positive = self.clip_tokenizer([
+            "a photo of a tree",
+            "an image of a tree in nature",
+            "a single tree outdoors",
+            "a forest tree"
+        ])
+        self.clip_negative = self.clip_tokenizer([
+            "a human face",
+            "a selfie",
+            "an indoor room",
+            "a wall",
+            "a person portrait"
+        ])
+        logger.info("OpenCLIP ready.")
 
     def encode_image(self, img: Image.Image) -> np.ndarray:
         img = ImageOps.exif_transpose(img).convert('RGB')
@@ -62,6 +69,78 @@ class Models:
         with torch.no_grad():
             vec = self.encoder(tensor)
         return vec.cpu().numpy()
+
+    def clip_tree_prob(self, img: Image.Image) -> float:
+        # Return a score ~[0,1] for tree likelihood vs negatives
+        with torch.no_grad():
+            image = self.clip_preprocess(ImageOps.exif_transpose(img).convert('RGB')).unsqueeze(0)
+            pos = self.clip_positive
+            neg = self.clip_negative
+            # Compute logits against concatenated prompts
+            texts = torch.cat([pos, neg], dim=0)
+            image_features = self.clip_model.encode_image(image)
+            text_features = self.clip_model.encode_text(texts)
+            image_features /= image_features.norm(dim=-1, keepdim=True)
+            text_features /= text_features.norm(dim=-1, keepdim=True)
+            logits = (image_features @ text_features.t()).squeeze(0)
+            # Softmax over prompts
+            probs = logits.softmax(dim=0)
+            pos_prob = float(probs[: len(pos)].sum().cpu())
+            return pos_prob
+
+    def clip_tree_stats(self, img: Image.Image) -> tuple[float, float]:
+        with torch.no_grad():
+            image = self.clip_preprocess(ImageOps.exif_transpose(img).convert('RGB')).unsqueeze(0)
+            pos = self.clip_positive
+            neg = self.clip_negative
+            texts = torch.cat([pos, neg], dim=0)
+            image_features = self.clip_model.encode_image(image)
+            text_features = self.clip_model.encode_text(texts)
+            image_features /= image_features.norm(dim=-1, keepdim=True)
+            text_features /= text_features.norm(dim=-1, keepdim=True)
+            logits = (image_features @ text_features.t()).squeeze(0)
+            probs = logits.softmax(dim=0)
+            pos_prob = float(probs[: len(pos)].sum().cpu())
+            neg_prob = float(probs[len(pos):].sum().cpu())
+            return pos_prob, neg_prob
+
+    def vegetation_ratio(self, img: Image.Image) -> float:
+        # Simple vegetation signal: ExG (excess green) > 0 on normalized channels
+        arr = np.asarray(ImageOps.exif_transpose(img).convert('RGB'), dtype=np.float32) / 255.0
+        r = arr[..., 0]
+        g = arr[..., 1]
+        b = arr[..., 2]
+        exg = 2*g - r - b
+        mask = exg > 0.05
+        return float(mask.mean())
+
+    def face_area_fraction(self, img: Image.Image) -> float:
+        if not OPENCV_OK:
+            return 0.0
+        try:
+            gray = np.array(ImageOps.exif_transpose(img).convert('L'))
+            face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
+            faces = face_cascade.detectMultiScale(gray, 1.1, 4)
+            if len(faces) == 0:
+                return 0.0
+            H, W = gray.shape[:2]
+            total = H * W
+            area = 0
+            for (x, y, fw, fh) in faces:
+                area = max(area, fw * fh)
+            return float(area / max(1, total))
+        except Exception:
+            return 0.0
+
+    def skin_ratio(self, img: Image.Image) -> float:
+        # Very coarse skin detection in YCrCb; helps detect selfies
+        bgr = np.array(ImageOps.exif_transpose(img).convert('RGB'))[..., ::-1]
+        ycrcb = cv2.cvtColor(bgr, cv2.COLOR_BGR2YCrCb) if OPENCV_OK else None
+        if ycrcb is None:
+            return 0.0
+        Y, Cr, Cb = ycrcb[..., 0], ycrcb[..., 1], ycrcb[..., 2]
+        mask = (Cr > 135) & (Cr < 180) & (Cb > 85) & (Cb < 135)
+        return float(mask.mean())
 
 
 MODELS: Optional[Models] = None
@@ -88,15 +167,82 @@ def hamming_distance_hex(a: str, b: str) -> int:
     return x.bit_count()
 
 
-def is_tree_like(img: Image.Image, thresholds: Thresholds) -> Tuple[bool, float]:
+def is_tree_like(img: Image.Image, thresholds: Thresholds) -> Tuple[bool, float, dict]:
     m = ensure_models_loaded()
-    v = m.encode_image(img)
-    pos_sim = float(cosine_similarity(v, m._zs_pos_vec)[0, 0])
-    neg_sim = float(cosine_similarity(v, m._zs_neg_vec)[0, 0])
-    # Normalize a pseudo-probability
-    score = (pos_sim - neg_sim + 1) / 2  # map roughly to [0,1]
-    logger.debug(f"zero-shot score ~ {score:.3f} (pos {pos_sim:.3f} / neg {neg_sim:.3f})")
-    return score >= thresholds.tree_confidence_min, score
+    # Quick pre-checks: very small images or extremely low high-frequency energy (likely blank)
+    w, h = img.size
+    if w < 160 or h < 160:
+        logger.debug("reject: image too small for reliable detection")
+        return False, 0.0, {"reason": "too_small", "w": w, "h": h}
+    blur = blur_score_fft(img)
+    if blur < thresholds.min_blur_score:
+        logger.debug("reject: image extremely blurry")
+        return False, 0.0, {"reason": "blur_low", "blur": blur}
+
+    # Face/saliency rejection (basic): if face detected prominently, likely not a tree submission
+    try:
+        if OPENCV_OK:
+            face_frac = m.face_area_fraction(img)
+            if face_frac > 0.04:
+                logger.debug("reject: large face detected")
+                return False, 0.0, {"reason": "face_detected", "face_area_frac": face_frac}
+    except Exception:
+        pass
+
+    # OpenCLIP tree probability and margin vs negatives
+    try:
+        pos_prob, neg_prob = m.clip_tree_stats(img)
+        tree_prob = pos_prob
+        margin = pos_prob - neg_prob
+    except Exception:
+        tree_prob = 0.0
+        margin = -1.0
+    logger.debug(f"clip tree prob ~ {tree_prob:.3f} | margin ~ {margin:.3f}")
+
+    # Vegetation ratio
+    veg = m.vegetation_ratio(img)
+    logger.debug(f"vegetation ratio ~ {veg:.3f}")
+
+    # EfficientNet feature heuristic (kept as a secondary signal)
+    # Combine signals: weighted score
+    score = float(0.7 * tree_prob + 0.2 * min(1.0, veg * 2.0) + 0.1 * max(0.0, margin))
+
+    # Additional selfie guard
+    skin = m.skin_ratio(img)
+    face_frac = m.face_area_fraction(img) if OPENCV_OK else 0.0
+
+    ok = (
+        (tree_prob >= thresholds.tree_confidence_min) and
+        (veg >= thresholds.min_veg_ratio) and
+        (margin >= thresholds.min_clip_margin) and
+        (skin < 0.15) and
+        (face_frac < 0.04)
+    )
+    info = {
+        "clip_tree_prob": tree_prob,
+        "clip_margin": margin,
+        "vegetation_ratio": veg,
+        "blur": blur,
+        "skin_ratio": skin,
+        "face_area_frac": face_frac,
+        "w": w,
+        "h": h
+    }
+    if not ok:
+        reasons = []
+        if tree_prob < thresholds.tree_confidence_min:
+            reasons.append("low_tree_prob")
+        if veg < thresholds.min_veg_ratio:
+            reasons.append("low_vegetation")
+        if margin < thresholds.min_clip_margin:
+            reasons.append("low_clip_margin")
+        if skin >= 0.15:
+            reasons.append("skin_detected")
+        if face_frac >= 0.04:
+            reasons.append("face_detected")
+        info["reasons"] = reasons
+
+    return ok, score, info
 
 
 def encode_feature_vector(img: Image.Image) -> np.ndarray:

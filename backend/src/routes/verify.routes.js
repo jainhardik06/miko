@@ -4,7 +4,21 @@ import multer from 'multer';
 const router = Router();
 const upload = multer();
 
-const AI_BASE_URL = process.env.AI_BASE_URL || 'http://miko_ai:8000';
+// Prefer explicit env; otherwise choose docker service when running in container, else localhost for dev
+const AI_BASE_URL = process.env.AI_BASE_URL || (process.env.DOCKER || process.env.CONTAINER ? 'http://miko_ai:8000' : 'http://localhost:8000');
+
+// Quick health check for AI service
+router.get('/health', async (_req, res) => {
+  try {
+    const resp = await fetch(`${AI_BASE_URL}/health`, { method: 'GET' });
+    let data = null;
+    try { data = await resp.json(); } catch {}
+    return res.status(resp.ok ? 200 : 503).json({ ok: resp.ok, target: AI_BASE_URL, ai: data });
+  } catch (err) {
+    console.error('[verify.health] failed', err);
+    return res.status(503).json({ ok: false, target: AI_BASE_URL, error: 'AI service unavailable' });
+  }
+});
 
 router.post('/tree', upload.single('image'), async (req, res) => {
   try {
@@ -21,7 +35,9 @@ router.post('/tree', upload.single('image'), async (req, res) => {
     form.append('longitude', String(longitude));
 
     const proxyUrl = `${AI_BASE_URL}/verify-tree`;
-    const resp = await fetch(proxyUrl, { method: 'POST', body: form });
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 7000);
+    const resp = await fetch(proxyUrl, { method: 'POST', body: form, signal: controller.signal }).finally(() => clearTimeout(timeout));
     const data = await resp.json();
     res.status(resp.status).json(data);
   } catch (err){
@@ -44,7 +60,9 @@ router.post('/tree-multi', upload.array('images', 6), async (req, res) => {
     }
     form.append('latitude', String(latitude));
     form.append('longitude', String(longitude));
-    const resp = await fetch(`${AI_BASE_URL}/verify-tree-multi`, { method: 'POST', body: form });
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 12000);
+    const resp = await fetch(`${AI_BASE_URL}/verify-tree-multi`, { method: 'POST', body: form, signal: controller.signal }).finally(() => clearTimeout(timeout));
     const data = await resp.json();
     res.status(resp.status).json(data);
   } catch (err){

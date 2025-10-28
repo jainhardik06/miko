@@ -39,3 +39,25 @@ export function verifyAptosSignature({ message, signature, publicKey, fullMessag
 }
 
 // Placeholder for EVM verification if added later using ethers.utils.verifyMessage
+
+
+// Do you want to submit a transaction for a range of [1256100 - 1884100] Octas at a gas unit price of 100 Octas? [yes/no] >
+// yes
+// Transaction submitted: https://explorer.aptoslabs.com/txn/0x967217cacc29023d41f9639e64b3699e9e2a5a15fc9c0383d12f4aec734ef969?network=devnet
+// {
+//   "Result": {
+//     "transaction_hash": "0x967217cacc29023d41f9639e64b3699e9e2a5a15fc9c0383d12f4aec734ef969",
+//     "gas_used": 12561,
+//     "gas_unit_price": 100,
+//     "sender": "6a6677bb2559869550af7ddf5303810731f4846a29bb3d0423d3ff1a26d78876",
+//     "sequence_number": 0,
+//     "replay_protector": {
+//       "SequenceNumber": 0
+//     },
+//     "success": true,
+//     "timestamp_us": 1761151810400250,
+//     "version": 202469249,
+//     "vm_status": "Executed successfully"
+//   }
+// }
+// PS D:\miko\miko\move>
