@@ -5,8 +5,27 @@ import { useAuth } from '../../components/auth/AuthProvider';
 import { fetchWalletChallenge, linkEmailRequest, linkEmailVerify, linkWallet, linkGoogleInitUrl, updateCurrentUser, deleteAccount } from '../../lib/authClient';
 import { connectPetra, signMessagePetra } from '../../lib/petra';
 import ThemeToggle from '../../components/ThemeToggle';
-import { MODULE_ADDRESS } from '../../config';
-import { fetchTrees, fetchRequests, fetchRequestsViaRest, ensureModulesAvailability, getModulesStatus, resetModuleAvailabilityCheck, type Tree, type Request } from '../../lib/aptos';
+import { MODULE_ADDRESS, getConfig } from '../../config';
+import type { Tree, Request } from '../../lib/aptos';
+
+const API = getConfig().apiOrigin;
+
+interface ProfileStats {
+  treesApproved: number;
+  treesPending: number;
+  treesRejected: number;
+  totalCCT: number;
+}
+
+interface BackendTree {
+  _id: string;
+  blockchainRequestId: number;
+  blockchainTreeId?: number;
+  metadataUri: string;
+  cctGranted: number;
+  status: 'pending' | 'approved' | 'rejected';
+  approvedAt?: string;
+}
 
 export default function ProfilePage(){
   const { user, methods, token, refresh, logout } = useAuth();
@@ -14,25 +33,106 @@ export default function ProfilePage(){
   const [saving, setSaving] = useState(false);
   const [statusMsg, setStatusMsg] = useState<string| null>(null);
   const [walletAddr, setWalletAddr] = useState<string | null>(null);
+  
+  // Backend data (supplementary stats only)
+  const [stats, setStats] = useState<ProfileStats>({ treesApproved: 0, treesPending: 0, treesRejected: 0, totalCCT: 0 });
+  const [backendTrees, setBackendTrees] = useState<BackendTree[]>([]);
+  const [loadingBackend, setLoadingBackend] = useState(false);
+  
+  // Blockchain data (PRIMARY source - shows all requests)
   const [trees, setTrees] = useState<Tree[]>([]);
   const [requests, setRequests] = useState<Request[]>([]);
   const [loadingOnchain, setLoadingOnchain] = useState(false);
+  const [modulesError, setModulesError] = useState<string | null>(null)
+  
   const [sellOpen, setSellOpen] = useState(false);
   const [sellAmount, setSellAmount] = useState<number>(0);
   const [sellPrice, setSellPrice] = useState<number>(1);
   const [sellSubmitting, setSellSubmitting] = useState(false);
-  const [modulesError, setModulesError] = useState<string | null>(null);
 
   useEffect(()=>{ setUsername(user?.username || ''); }, [user?.username]);
 
   const canSave = useMemo(()=> token && username && username !== (user?.username||'') , [token, username, user?.username]);
 
+  // Compute stats from blockchain data when using Web3 mode
   const myRequests = useMemo(()=> walletAddr ? requests.filter(r=> r.requester.toLowerCase() === walletAddr.toLowerCase()) : [], [walletAddr, requests]);
   const pending = myRequests.filter(r=> r.status === 1);
   const approved = myRequests.filter(r=> r.status === 2);
   const rejected = myRequests.filter(r=> r.status === 3);
-
   const myTrees = useMemo(()=> walletAddr ? trees.filter(t=> t.owner.toLowerCase() === walletAddr.toLowerCase()) : [], [walletAddr, trees]);
+
+  // Load from Backend API (MongoDB cache) - SUPPLEMENTARY method for stats only
+  const loadStatsFromBackend = useCallback(async () => {
+    if (!token) return;
+    try {
+      // Load profile stats from backend (cached data)
+      const profileRes = await fetch(`${API}/api/profile/me`, {
+        credentials: 'include',
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      
+      if (profileRes.ok) {
+        const profileData = await profileRes.json();
+        setStats(profileData.stats || { treesApproved: 0, treesPending: 0, treesRejected: 0, totalCCT: 0 });
+      }
+
+      // Load approved trees from backend (only approved ones are in DB)
+      const treesRes = await fetch(`${API}/api/profile/trees?status=approved`, {
+        credentials: 'include',
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      
+      if (treesRes.ok) {
+        const treesData = await treesRes.json();
+        setBackendTrees(treesData.trees || []);
+      }
+    } catch (err) {
+      console.error('[Profile] Backend API error:', err);
+    }
+  }, [token]);
+
+  // Load from Blockchain via Backend Proxy (cached, no rate limits!)
+  const loadFromBlockchain = useCallback(async (addr?: string, fresh = false)=>{
+    setLoadingOnchain(true);
+    setModulesError(null);
+    try {
+      // Fetch from backend proxy (which caches blockchain data)
+      const freshParam = fresh ? '?fresh=true' : '';
+      const [treesRes, requestsRes] = await Promise.all([
+        fetch(`${API}/api/blockchain/trees${freshParam}`, { credentials: 'include' }),
+        fetch(`${API}/api/blockchain/requests${freshParam}`, { credentials: 'include' })
+      ]);
+
+      if (treesRes.ok && requestsRes.ok) {
+        const treesData = await treesRes.json();
+        const requestsData = await requestsRes.json();
+        
+        setTrees(treesData.trees || []);
+        setRequests(requestsData.requests || []);
+        setStatusMsg(treesData.cached ? '✓ Loaded (cached)' : '✓ Loaded from blockchain');
+      } else {
+        throw new Error('Failed to fetch blockchain data from backend');
+      }
+      
+      if (addr) setWalletAddr(addr);
+    } catch (error: any) {
+      console.error('[Profile] Blockchain load error:', error);
+      setModulesError(error.message || 'Failed to load blockchain data');
+      setStatusMsg('⚠ Unable to load data - please try again');
+    } finally { 
+      setLoadingOnchain(false); 
+    }
+  }, []);
+
+  // On mount: ALWAYS load from blockchain (source of truth), supplement with backend stats
+  useEffect(() => { 
+    if (token) {
+      // Load blockchain data first (this shows all requests)
+      loadFromBlockchain();
+      // Then load backend stats as supplementary info
+      loadStatsFromBackend();
+    }
+  }, [token, loadFromBlockchain, loadStatsFromBackend]);
 
   if(!token){
     return (
@@ -92,41 +192,17 @@ export default function ProfilePage(){
     try {
       const p = await connectPetra();
       setWalletAddr(p.address);
-      await loadOnchain(p.address);
+      await loadFromBlockchain(p.address);
     } catch(e:any){ setStatusMsg(e?.message||'Unable to connect wallet'); }
-  }, []);
-
-  const loadOnchain = useCallback(async (addr?: string)=>{
-    setLoadingOnchain(true);
-    try {
-      // Quick module availability check to avoid spamming failing network calls
-      const available = await ensureModulesAvailability();
-      const status = getModulesStatus();
-      setModulesError(available ? null : (status.error || 'On-chain modules are not available'));
-      let [t, r] = await Promise.all([
-        fetchTrees(200),
-        fetchRequests(400),
-      ]);
-      // If view path returns nothing (SDK Option quirk), try REST resource fallback
-      if (!r || r.length === 0) {
-        try { r = await fetchRequestsViaRest(); } catch {}
-      }
-      setTrees(t);
-      setRequests(r);
-      if (addr) setWalletAddr(addr);
-    } finally { setLoadingOnchain(false); }
-  }, []);
-
-  useEffect(()=>{ void loadOnchain(); }, [loadOnchain]);
-  // If user already has a linked wallet (via auth methods), auto-use it so no manual connect is needed
+  }, [loadFromBlockchain]);
+  
+  // If user already has a linked wallet (via auth methods), auto-use it
   useEffect(()=>{
     const linked = methods?.wallets?.[0]?.address;
     if (linked && !walletAddr) {
       setWalletAddr(linked);
-      // Ensure on-chain data is loaded as well
-      void loadOnchain(linked);
     }
-  }, [methods?.wallets, walletAddr, loadOnchain]);
+  }, [methods?.wallets, walletAddr]);
 
   // If Petra is already connected in the browser, adopt its address without prompting
   useEffect(()=>{
@@ -136,10 +212,9 @@ export default function ProfilePage(){
       const addr: string | undefined = anyWin?.petra?.address || anyWin?.aptos?.account?.address;
       if (addr && typeof addr === 'string') {
         setWalletAddr(addr);
-        void loadOnchain(addr);
       }
     } catch {}
-  }, [walletAddr, loadOnchain]);
+  }, [walletAddr]);
 
   async function onDelete(){
     if(!token) return;
@@ -167,7 +242,17 @@ export default function ProfilePage(){
           <h2 className="text-lg font-semibold">Dashboard</h2>
           {walletAddr ? (
             <div className="flex items-center gap-3">
-              <button className="btn-secondary" onClick={()=> { resetModuleAvailabilityCheck(); void loadOnchain(walletAddr); }} disabled={loadingOnchain}>Refresh</button>
+              <button 
+                className="btn-secondary" 
+                onClick={async ()=> { 
+                  // Force fresh data from blockchain (bypass cache)
+                  await loadFromBlockchain(walletAddr, true);
+                  await loadStatsFromBackend();
+                }} 
+                disabled={loadingOnchain || loadingBackend}
+              >
+                {loadingOnchain ? 'Loading...' : 'Refresh'}
+              </button>
               <div className="text-xs text-neutral-400 break-all">{walletAddr}</div>
             </div>
           ) : (

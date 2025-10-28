@@ -32,6 +32,12 @@ const UserSchema = new mongoose.Schema({
     }
   },
   corporateProfile: CorporateProfileSchema,
+  stats: {
+    treesApproved: { type: Number, default: 0 },
+    treesPending: { type: Number, default: 0 },
+    treesRejected: { type: Number, default: 0 },
+    totalCCT: { type: Number, default: 0 }
+  },
   createdAt: { type:Date, default:Date.now },
   lastLoginAt: Date,
   meta: {

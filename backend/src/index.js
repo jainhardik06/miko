@@ -1,6 +1,7 @@
 import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
+import cookieParser from 'cookie-parser';
 import passport from 'passport';
 import './config/passport.js';
 import { connectDb } from './config/db.js';
@@ -11,6 +12,9 @@ import mintRoutes from './routes/mint.routes.js';
 import speciesRoutes from './routes/species.routes.js';
 import storageRoutes from './routes/storage.routes.js';
 import ipfsRoutes from './routes/ipfs.routes.js';
+import adminRoutes from './routes/admin.routes.js';
+import marketplaceRoutes from './routes/marketplace.routes.js';
+import blockchainRoutes from './routes/blockchain.routes.js';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
@@ -32,6 +36,7 @@ app.use(cors({
 }));
 // Allow larger JSON bodies for image data URLs (kept modest to avoid abuse)
 app.use(express.json({ limit: '10mb' }));
+app.use(cookieParser());
 app.use(passport.initialize());
 
 app.get('/api/health', (_req,res)=> res.json({ ok:true, service:'auth', time:Date.now() }));
@@ -42,6 +47,9 @@ app.use('/api/mint', mintRoutes);
 app.use('/api/species', speciesRoutes);
 app.use('/api/storage', storageRoutes);
 app.use('/api/ipfs', ipfsRoutes);
+app.use('/api/admin', adminRoutes);
+app.use('/api/marketplace', marketplaceRoutes);
+app.use('/api/blockchain', blockchainRoutes);
 
 // Static hosting for uploaded assets under /uploads
 const __filename = fileURLToPath(import.meta.url);

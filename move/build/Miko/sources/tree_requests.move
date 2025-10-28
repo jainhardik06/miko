@@ -92,6 +92,7 @@ module miko::tree_requests {
         event::emit_event(&mut ev.rejected, Rejected { id: request_id });
     }
 
+    #[view]
     public fun get_request(id: u64): Option<RequestView> acquires Requests {
         if (!exists<Requests>(@admin)) return option::none<RequestView>();
         let store = borrow_global<Requests>(@admin);
@@ -113,6 +114,56 @@ module miko::tree_requests {
             i = i + 1;
         };
         option::none<RequestView>()
+    }
+
+    /// Get all pending requests
+    #[view]
+    public fun get_all_pending(): vector<RequestView> acquires Requests {
+        if (!exists<Requests>(@admin)) return vector::empty<RequestView>();
+        let store = borrow_global<Requests>(@admin);
+        let result = vector::empty<RequestView>();
+        let len = vector::length(&store.entries);
+        let i = 0;
+        while (i < len) {
+            let r = vector::borrow(&store.entries, i);
+            if (r.status == STATUS_PENDING) {
+                let view = RequestView {
+                    id: r.id,
+                    requester: r.requester,
+                    metadata_uri: clone_bytes(&r.metadata_uri),
+                    submitted_at: r.submitted_at,
+                    status: r.status,
+                    rate_ppm: r.rate_ppm,
+                };
+                vector::push_back(&mut result, view);
+            };
+            i = i + 1;
+        };
+        result
+    }
+
+    /// Get all requests (any status)
+    #[view]
+    public fun get_all_requests(): vector<RequestView> acquires Requests {
+        if (!exists<Requests>(@admin)) return vector::empty<RequestView>();
+        let store = borrow_global<Requests>(@admin);
+        let result = vector::empty<RequestView>();
+        let len = vector::length(&store.entries);
+        let i = 0;
+        while (i < len) {
+            let r = vector::borrow(&store.entries, i);
+            let view = RequestView {
+                id: r.id,
+                requester: r.requester,
+                metadata_uri: clone_bytes(&r.metadata_uri),
+                submitted_at: r.submitted_at,
+                status: r.status,
+                rate_ppm: r.rate_ppm,
+            };
+            vector::push_back(&mut result, view);
+            i = i + 1;
+        };
+        result
     }
 
     fun borrow_request_mut(store: &mut Requests, id: u64): (&mut Request, u64) {

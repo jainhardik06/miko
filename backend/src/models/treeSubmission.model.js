@@ -12,9 +12,10 @@ const TreeSubmissionSchema = new mongoose.Schema({
   vector: { type: [Number], index: false },
   aiDecision: Object,
   createdAt: { type: Date, default: Date.now },
-  reviewedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+  reviewedBy: String, // Can be adminId or username
   reviewedAt: Date,
-  reviewNotes: String
+  reviewNotes: String,
+  cctGranted: Number // CCT amount granted upon approval
 }, { timestamps: true });
 
 export default mongoose.models.TreeSubmission || mongoose.model('TreeSubmission', TreeSubmissionSchema);
