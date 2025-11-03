@@ -22,8 +22,8 @@ module miko::tree_requests {
         requester: address,
         metadata_uri: vector<u8>,
         submitted_at: u64,
-        status: u8,
-        rate_ppm: u64, // optional initial proposed rate (0 until oracle sets or validator decides)
+    status: u8,
+    rate_ppm: u64, // repurposed: total granted CCT in micro-units (no accrual)
     }
 
     /// Copyable view for off-chain reads
@@ -32,8 +32,8 @@ module miko::tree_requests {
         requester: address,
         metadata_uri: vector<u8>,
         submitted_at: u64,
-        status: u8,
-        rate_ppm: u64,
+    status: u8,
+    rate_ppm: u64,
     }
 
     struct Requests has key { entries: vector<Request>, next_id: u64 }
@@ -64,12 +64,12 @@ module miko::tree_requests {
         let store = borrow_global_mut<Requests>(@admin);
         let id = store.next_id; store.next_id = id + 1;
         let now = timestamp::now_seconds();
-        vector::push_back(&mut store.entries, Request { id, requester: addr, metadata_uri, submitted_at: now, status: STATUS_PENDING, rate_ppm: 0 });
+    vector::push_back(&mut store.entries, Request { id, requester: addr, metadata_uri, submitted_at: now, status: STATUS_PENDING, rate_ppm: 0 });
         let ev = borrow_global_mut<Events>(@admin);
         event::emit_event(&mut ev.submitted, Submitted { id, requester: addr });
     }
 
-    /// Validator approves and mints tree via friend function in tree_nft. Supplies initial rate_ppm.
+    /// Validator approves and mints tree via friend function in tree_nft. Supplies granted CCT amount (micro-CCT) via `rate_ppm` field.
     public entry fun approve(validator: &signer, request_id: u64, rate_ppm: u64) acquires Requests, Events {
         assert!(roles::is_validator(signer::address_of(validator)), E_NOT_VALIDATOR);
         let store = borrow_global_mut<Requests>(@admin);
@@ -77,7 +77,7 @@ module miko::tree_requests {
         assert!(req_ref.status == STATUS_PENDING, E_BAD_STATUS);
         req_ref.status = STATUS_APPROVED;
         req_ref.rate_ppm = rate_ppm;
-    let tree_id = tree_nft::mint_by_validator_internal(validator, req_ref.requester, clone_bytes(&req_ref.metadata_uri), rate_ppm);
+        let tree_id = tree_nft::mint_by_validator_internal(validator, req_ref.requester, clone_bytes(&req_ref.metadata_uri), rate_ppm);
         let ev = borrow_global_mut<Events>(@admin);
         event::emit_event(&mut ev.approved, Approved { id: request_id, tree_id, rate_ppm });
     }
@@ -116,7 +116,7 @@ module miko::tree_requests {
         option::none<RequestView>()
     }
 
-    /// Get all pending requests
+    // Get all pending requests
     #[view]
     public fun get_all_pending(): vector<RequestView> acquires Requests {
         if (!exists<Requests>(@admin)) return vector::empty<RequestView>();
@@ -142,7 +142,7 @@ module miko::tree_requests {
         result
     }
 
-    /// Get all requests (any status)
+    // Get all requests (any status)
     #[view]
     public fun get_all_requests(): vector<RequestView> acquires Requests {
         if (!exists<Requests>(@admin)) return vector::empty<RequestView>();

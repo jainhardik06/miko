@@ -4,14 +4,69 @@ import { aptos } from '../state/store';
 import { AccountAddressInput, SimpleTransaction, Aptos, InputViewFunctionData } from '@aptos-labs/ts-sdk';
 import { MODULE_ADDRESS } from '../config';
 
+export const MICRO_UNITS = 1_000_000;
+// Each on-chain rate_ppm value represents micro-CCT, so 1 credit == 1 token.
+export const TOKENS_PER_CREDIT = 1;
+
+export function microToTokens(micro: number): number {
+  if (!Number.isFinite(micro)) return 0;
+  return Math.max(0, Math.round(micro / MICRO_UNITS));
+}
+
+export function tokensToMicro(tokens: number): number {
+  if (!Number.isFinite(tokens)) return 0;
+  if (!Number.isInteger(tokens)) {
+    throw new Error('Token amount must be a whole number');
+  }
+  return tokens * MICRO_UNITS;
+}
+
+export function ratePpmToCredits(ratePpm: number): number {
+  if (!Number.isFinite(ratePpm)) return 0;
+  return Math.max(0, Math.round(ratePpm / MICRO_UNITS));
+}
+
+export function ratePpmToTokens(ratePpm: number): number {
+  return ratePpmToCredits(ratePpm) * TOKENS_PER_CREDIT;
+}
+
+export async function getPendingCCT(address: string): Promise<number> {
+  if (!(await ensureModulesAvailability())) return 0;
+  try {
+    const [pending] = await view(aptos, {
+      function: fq('cct', 'pending'),
+      functionArguments: [address],
+      typeArguments: []
+    });
+    return Number(pending || 0);
+  } catch {
+    return 0;
+  }
+}
+
+export async function buildClaimPendingTx(sender: AccountAddressInput): Promise<SimpleEntryFunctionTx | null> {
+  if (!(await ensureModulesAvailability())) return null;
+  return {
+    sender,
+    data: {
+      function: fq('cct', 'claim_pending'),
+      functionArguments: [],
+      typeArguments: []
+    }
+  };
+}
+
 export type Tree = {
   id: number;
   owner: string;
-  rate_ppm: number;
+  rate_ppm: number; // represents total granted CCT in micro units (legacy field name)
   status: number;
   metadata_uri: string;
   cumulative_claimed: number;
-  pending?: number;
+  created_at: number;
+  last_claim: number;
+  granted_ccr?: number;
+  granted_cct?: number;
 };
 
 export type Request = {
@@ -21,6 +76,8 @@ export type Request = {
   submitted_at: number;
   status: number; // 1=pending,2=approved,3=rejected
   rate_ppm: number;
+  granted_ccr?: number;
+  granted_cct?: number;
 };
 
 // Fallback local cache (populated after first fetch) to avoid redundant view calls in quick succession.
@@ -124,69 +181,67 @@ export async function fetchRequestsViaRest(): Promise<Request[]> {
   } catch { return []; }
 }
 
-// Build (but do not sign) a claim transaction; wallet adapter will handle gas + signing.
-type SimpleEntryFunctionTx = { sender: AccountAddressInput; data: { function: string; functionArguments: unknown[]; typeArguments: string[] } };
-
-export function buildClaimCCTTx(sender: AccountAddressInput, treeId: number): SimpleEntryFunctionTx {
-  return {
-    sender,
-    data: {
-      function: fq(TREE_MODULE_NAME, 'claim'),
-      functionArguments: [treeId],
-      typeArguments: []
-    }
-  };
-}
-
 // Return a wallet-compatible transaction payload for listing tokens.
-export function listTokensTx(sender: AccountAddressInput, amount: number, unitPrice: number): SimpleEntryFunctionTx {
+type SimpleEntryFunctionTx = { sender: AccountAddressInput; data: { function: string; functionArguments: unknown[]; typeArguments: string[] } };
+export function listTokensTx(sender: AccountAddressInput, amountTokens: number, unitPrice: number): SimpleEntryFunctionTx {
+  const amountMicro = tokensToMicro(amountTokens);
   return {
     sender,
     data: {
       function: fq(MARKET_MODULE_NAME, 'list'),
-      functionArguments: [amount, unitPrice],
+      functionArguments: [amountMicro, unitPrice],
       typeArguments: []
     }
   };
 }
 
 export function buyCCT(sender: AccountAddressInput, listingId: number, amount: number): SimpleEntryFunctionTx {
+  const amountMicro = tokensToMicro(amount);
   return {
     sender,
     data: {
       function: fq(MARKET_MODULE_NAME, 'buy'),
-      functionArguments: [listingId, amount],
+      functionArguments: [listingId, amountMicro],
       typeArguments: []
     }
   };
 }
 
-export interface Listing { id: number; seller: string; remaining: number; unit_price: number; created_at: number; }
+export interface Listing {
+  id: number;
+  seller: string;
+  remaining_micro: number;
+  remaining_tokens: number;
+  unit_price: number;
+  created_at: number;
+}
 
 export async function fetchListings(max: number = 200): Promise<Listing[]> {
   if (!(await ensureModulesAvailability())) return [];
   try {
-    const [raw] = await view(aptos, {
-      function: fq(MARKET_MODULE_NAME, 'listings'),
-      functionArguments: [],
-      typeArguments: []
-    });
-    if (!Array.isArray(raw)) return [];
-  return (raw as RawListing[]).map((l: RawListing) => ({
-      id: Number(l.id),
-      seller: String(l.seller),
-      remaining: Number(l.remaining),
-      unit_price: Number(l.unit_price),
-      created_at: Number(l.created_at)
-    })).slice(0, max);
-  } catch { return []; }
+    const base = getFullnodeBase();
+    const type = encodeURIComponent(`${MODULE_ADDRESS}::${MARKET_MODULE_NAME}::Registry`);
+    const url = `${base}/v1/accounts/${MODULE_ADDRESS}/resource/${type}`;
+    const resp = await fetch(url, { cache: 'no-store' });
+    if (!resp.ok) {
+      console.warn('[aptos] fetchListings registry error', resp.status);
+      return [];
+    }
+    const json = await resp.json();
+    const list: RawListing[] = Array.isArray(json?.data?.list) ? json.data.list : [];
+    return list.slice(0, max).map(normalizeListing);
+  } catch (error) {
+    console.error('[aptos] fetchListings failed:', error);
+    return [];
+  }
 }
 
 export async function computeListingStats() {
   const listings = await fetchListings();
-  const totalRemaining = listings.reduce((a,l)=>a+Number(l.remaining||0),0);
-  const avgPrice = listings.length ? listings.reduce((a,l)=>a+Number(l.unit_price),0)/listings.length : 0;
-  const highest = listings.reduce((m,l)=> l.unit_price>m ? l.unit_price : m, 0);
+  const totalMicro = listings.reduce((a, l) => a + Number(l.remaining_micro || 0), 0);
+  const totalRemaining = microToTokens(totalMicro);
+  const avgPrice = listings.length ? listings.reduce((a, l) => a + Number(l.unit_price), 0) / listings.length : 0;
+  const highest = listings.reduce((m, l) => (l.unit_price > m ? l.unit_price : m), 0);
   return {
     count: listings.length,
     totalRemaining,
@@ -210,53 +265,49 @@ export async function listTokensTxLegacy(sender: AccountAddressInput, amount: nu
 
 export async function fetchListing(id: number): Promise<Listing | null> {
   if (!(await ensureModulesAvailability())) return null;
-  try {
-    const [opt] = await view(aptos, {
-      function: fq(MARKET_MODULE_NAME, 'get_listing'),
-      functionArguments: [id],
-      typeArguments: []
-    });
-    if (!opt) return null;
-  const o = opt as Record<string, unknown>; // SDK returns a loosely typed Move struct
-    return {
-      id: Number(o.id),
-      seller: String(o.seller),
-      remaining: Number(o.remaining),
-      unit_price: Number(o.unit_price),
-      created_at: Number(o.created_at)
-    };
-  } catch { return null; }
-}
-
-export async function pendingAmount(id: number): Promise<number> {
-  const [val] = await view(aptos, {
-  function: fq(TREE_MODULE_NAME, 'pending_amount'),
-    functionArguments: [id],
-    typeArguments: []
-  });
-  return Number(val || 0);
+  const listings = await fetchListings();
+  return listings.find((l) => l.id === id) ?? null;
 }
 
 function normalizeTree(raw: Record<string, unknown>): Tree {
+  const rate = Number(raw.rate_ppm);
   return {
     id: Number(raw.id),
     owner: String(raw.owner),
-    rate_ppm: Number(raw.rate_ppm),
+    rate_ppm: rate,
     status: Number(raw.status),
     metadata_uri: bytesToString(raw.metadata_uri),
     cumulative_claimed: Number(raw.cumulative_claimed),
-    pending: 0
+    created_at: Number(raw.created_at || 0),
+    last_claim: Number(raw.last_claim || 0),
+    granted_ccr: ratePpmToCredits(rate),
+    granted_cct: ratePpmToTokens(rate)
+  };
+}
+
+function normalizeListing(raw: RawListing): Listing {
+  const remainingMicro = Number(raw.remaining ?? (raw as any)?.remaining_micro ?? 0);
+  return {
+    id: Number(raw.id ?? 0),
+    seller: String(raw.seller ?? ''),
+    remaining_micro: remainingMicro,
+    remaining_tokens: microToTokens(remainingMicro),
+    unit_price: Number(raw.unit_price ?? (raw as any)?.price ?? 0),
+    created_at: Number(raw.created_at ?? (raw as any)?.listed_at ?? 0)
   };
 }
 
 function normalizeRequest(raw: Record<string, unknown>): Request {
+  const rate = Number(raw.rate_ppm);
   return {
     id: Number(raw.id),
     requester: String(raw.requester),
     metadata_uri: bytesToString(raw.metadata_uri),
     submitted_at: Number(raw.submitted_at),
     status: Number(raw.status),
-    rate_ppm: Number(raw.rate_ppm),
+    rate_ppm: rate,
+    granted_ccr: ratePpmToCredits(rate),
+    granted_cct: ratePpmToTokens(rate),
   };
 }
 function bytesToString(bytes: unknown): string {
@@ -284,13 +335,16 @@ function normalizeRequestFromResource(e: any): Request {
   if (Array.isArray(u)) meta = bytesToString(u);
   else if (typeof u === 'string') meta = hexToString(u);
   else meta = String(u ?? '');
+  const rate = Number(e?.rate_ppm ?? 0);
   return {
     id: Number(e?.id ?? 0),
     requester: String(e?.requester ?? ''),
     metadata_uri: meta,
     submitted_at: Number(e?.submitted_at ?? 0),
     status: Number(e?.status ?? 0),
-    rate_ppm: Number(e?.rate_ppm ?? 0)
+    rate_ppm: rate,
+    granted_ccr: ratePpmToCredits(rate),
+    granted_cct: ratePpmToTokens(rate)
   };
 }
 
@@ -339,4 +393,33 @@ export function getModulesStatus() {
 export function resetModuleAvailabilityCheck() {
   modulesChecked = false;
   lastModuleCheckError = null;
+}
+
+// Get CCT balance for an address
+export async function getCCTBalance(address: string): Promise<number> {
+  if (!(await ensureModulesAvailability())) return 0;
+  try {
+    // Use Aptos SDK's built-in coin balance query instead of custom view function
+    // This directly reads the CoinStore<CCT> resource from the account
+    const coinType = `${MODULE_ADDRESS}::cct::CCT`;
+    
+    try {
+      const balance = await aptos.getAccountCoinAmount({
+        accountAddress: address,
+        coinType: coinType as `${string}::${string}::${string}`
+      });
+      return Number(balance || 0);
+    } catch (innerError: any) {
+      // If CoinStore doesn't exist for this user, balance is 0
+      if (innerError?.message?.includes('Resource not found') || 
+          innerError?.message?.includes('not found') ||
+          innerError?.status === 404) {
+        return 0;
+      }
+      throw innerError;
+    }
+  } catch (error: any) {
+    console.error('[getCCTBalance] Error:', error);
+    return 0;
+  }
 }

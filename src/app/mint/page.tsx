@@ -537,19 +537,87 @@ export default function MintPage() {
         throw new Error(initErr);
       }
 
-      // Upload image and metadata to backend; get compact metadata URL
+      // Upload to Pinata IPFS (Web3 storage)
       const api = getConfig().apiOrigin;
-      const uploadResp = await fetch(`${api}/api/storage/upload`, {
+      
+      // Step 1: Upload disease photos to IPFS first (if any)
+      let diseasePhotosWithIPFS: Array<{ name: string; appearance: string; photo?: string }> = [];
+      if (form.diseaseEntries && form.diseaseEntries.length > 0) {
+        diseasePhotosWithIPFS = await Promise.all(
+          form.diseaseEntries.map(async (disease) => {
+            if (!disease.photoDataUrl) {
+              return { name: disease.name, appearance: disease.appearance };
+            }
+            
+            // Convert data URL to FormData
+            const match = disease.photoDataUrl.match(/^data:([^;]+);base64,(.*)$/);
+            if (!match) return { name: disease.name, appearance: disease.appearance };
+            
+            const formData = new FormData();
+            const blob = await fetch(disease.photoDataUrl).then(r => r.blob());
+            formData.append('file', blob, `disease-${Date.now()}.jpg`);
+            formData.append('name', `disease-${disease.name}`);
+            
+            try {
+              const photoResp = await fetch(`${api}/api/ipfs/upload`, {
+                method: 'POST',
+                body: formData
+              });
+              if (!photoResp.ok) throw new Error('Disease photo upload failed');
+              const { ipfsUri } = await photoResp.json();
+              return { name: disease.name, appearance: disease.appearance, photo: ipfsUri };
+            } catch (e) {
+              console.error('Failed to upload disease photo to IPFS:', e);
+              return { name: disease.name, appearance: disease.appearance };
+            }
+          })
+        );
+      }
+
+      // Step 2: Build enriched metadata with IPFS disease photos
+      const enrichedMetadata = {
+        ...metadataObject,
+        attributes: {
+          name: form.name,
+          speciesCommon: form.species === "Other" ? form.otherSpecies || "Other" : form.species,
+          speciesScientific: form.speciesScientific || undefined,
+          age: form.age ? Number(form.age) : undefined,
+          heightM: form.heightM ? Number(form.heightM) : undefined,
+          girthCm: form.girthCm ? Number(form.girthCm) : undefined,
+          diseaseNotes: form.diseases || undefined,
+          diseases: diseasePhotosWithIPFS.length > 0 ? diseasePhotosWithIPFS : undefined,
+          details: form.details || undefined,
+        },
+        verificationData: verifyDetails ? {
+          aiVerified: verifyStatus?.state === 'passed',
+          confidence: (verifyDetails as any).confidence || 0,
+          estimatedCCT: estimate,
+          verifiedAt: new Date().toISOString(),
+        } : undefined,
+      };
+
+      // Step 3: Upload tree image + metadata bundle to IPFS
+      const uploadResp = await fetch(`${api}/api/ipfs/upload-bundle`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ imageDataUrl: capturedDataUrl, metadata: metadataObject })
+        body: JSON.stringify({ 
+          imageDataUrl: capturedDataUrl, 
+          metadata: enrichedMetadata 
+        })
       });
-      if (!uploadResp.ok) throw new Error(`Upload failed (${uploadResp.status})`);
-      const { metadataUrl } = await uploadResp.json();
-      if (!metadataUrl || typeof metadataUrl !== 'string') throw new Error('Upload did not return metadataUrl');
+      if (!uploadResp.ok) throw new Error(`IPFS upload failed (${uploadResp.status})`);
+      const uploadResult = await uploadResp.json();
+      const metadataUri = uploadResult.metadata?.ipfsUri;
+      if (!metadataUri || typeof metadataUri !== 'string') throw new Error('IPFS upload did not return metadata URI');
 
-      // Submit only the URL as vector<u8> (UTF-8) to keep tx small
-      const arg0 = toHexUtf8(metadataUrl);
+      console.log('✅ Uploaded to IPFS:', { 
+        image: uploadResult.image?.ipfsUri, 
+        metadata: metadataUri,
+        gateway: uploadResult.metadata?.gatewayUrl 
+      });
+
+      // Submit IPFS URI to blockchain (ipfs://Qm... format)
+      const arg0 = toHexUtf8(metadataUri);
       const payload: any = {
         type: "entry_function_payload",
         function: `${MODULE_ADDRESS}::tree_requests::submit`,

@@ -2,6 +2,7 @@
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { loginSuperAdmin, loginVerificationAdmin } from '@/lib/api/admin';
+import { useAdmin } from '@/components/admin/AdminProvider';
 import Link from 'next/link';
 
 type AdminType = 'super' | 'verification';
@@ -13,6 +14,7 @@ export default function AdminLoginPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const router = useRouter();
+  const { refresh } = useAdmin();
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -27,8 +29,9 @@ export default function AdminLoginPage() {
         const result = await loginVerificationAdmin(username, password);
         console.log('[Login] Verification admin login successful:', result);
       }
-      // Small delay to ensure cookie is set
-      await new Promise(resolve => setTimeout(resolve, 100));
+
+      // refresh admin context so guards/dashboards see the authenticated session
+      await refresh();
       router.push('/admin/dashboard');
     } catch (err: any) {
       console.error('[Login] Error:', err);

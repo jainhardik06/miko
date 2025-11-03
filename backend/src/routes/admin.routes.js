@@ -19,6 +19,192 @@ const router = Router();
 const NODE_URL = process.env.APTOS_NODE_URL || 'https://fullnode.devnet.aptoslabs.com/v1';
 const aptosClient = new AptosClient(NODE_URL);
 
+function resolveGatewayBase() {
+  const raw = (process.env.PINATA_GATEWAY_BASE || 'https://gateway.pinata.cloud/ipfs').trim();
+  const withProtocol = /^https?:\/\//i.test(raw)
+    ? raw
+    : `https://${raw.replace(/^\/+/, '')}`;
+
+  let normalized = withProtocol.replace(/\/$/, '') || 'https://gateway.pinata.cloud/ipfs';
+
+  if (!/\/ipfs(\/|$)/i.test(normalized)) {
+    normalized = `${normalized}/ipfs`;
+  }
+
+  return normalized;
+}
+
+const PINATA_GATEWAY_BASE = resolveGatewayBase();
+
+function decodeBytesToString(value) {
+  if (!value && value !== 0) return '';
+
+  if (Array.isArray(value)) {
+    try {
+      return Buffer.from(value).toString('utf8').replace(/\0+$/, '');
+    } catch {
+      return '';
+    }
+  }
+
+  if (typeof value === 'string') {
+    if (value.startsWith('0x')) {
+      try {
+        let decoded = Buffer.from(value.slice(2), 'hex').toString('utf8').replace(/\0+$/, '');
+        if (decoded.startsWith('0x')) {
+          decoded = Buffer.from(decoded.slice(2), 'hex').toString('utf8').replace(/\0+$/, '');
+        }
+        return decoded;
+      } catch {
+        return '';
+      }
+    }
+    return value;
+  }
+
+  try {
+    return Buffer.from(String(value)).toString('utf8').replace(/\0+$/, '');
+  } catch {
+    return String(value || '');
+  }
+}
+
+function toGatewayUrlMaybe(uri) {
+  if (!uri || typeof uri !== 'string') return uri;
+  if (!uri.startsWith('ipfs://')) return uri;
+  const cleaned = uri.replace('ipfs://', '').replace(/^\/+/, '');
+  return `${PINATA_GATEWAY_BASE.replace(/\/$/, '')}/${cleaned}`;
+}
+
+function normalizeConfidence(value) {
+  if (typeof value !== 'number' || Number.isNaN(value)) return undefined;
+  if (value < 0) return 0;
+  if (value <= 1) return value;
+  return Math.min(1, value / 100);
+}
+
+function extractLocation(metadata) {
+  const fallback = { type: 'Point', coordinates: [0, 0] };
+  if (!metadata || typeof metadata !== 'object') return fallback;
+
+  const source = metadata.location || metadata.attributes?.location || metadata.form?.location;
+  if (!source || typeof source !== 'object') return fallback;
+
+  const lat = Number(source.lat ?? source.latitude ?? (Array.isArray(source) ? source[1] : undefined));
+  const lon = Number(source.lon ?? source.lng ?? source.longitude ?? (Array.isArray(source) ? source[0] : undefined));
+
+  if (Number.isFinite(lat) && Number.isFinite(lon)) {
+    return { type: 'Point', coordinates: [lon, lat] };
+  }
+
+  return fallback;
+}
+
+function extractAiDecision(metadata) {
+  if (!metadata || typeof metadata !== 'object') return null;
+
+  if (metadata.aiDecision && typeof metadata.aiDecision === 'object') {
+    return metadata.aiDecision;
+  }
+
+  if (metadata.verificationData && typeof metadata.verificationData === 'object') {
+    const details = { ...metadata.verificationData };
+    const status = typeof details.status === 'string'
+      ? details.status
+      : details.aiVerified === true
+        ? 'PASSED'
+        : details.aiVerified === false
+          ? 'FLAGGED'
+          : 'UNKNOWN';
+
+    const confidence = normalizeConfidence(details.confidence);
+    const metrics = confidence !== undefined
+      ? { ...(details.metrics || {}), tree_score: confidence }
+      : details.metrics;
+
+    return {
+      ...details,
+      status,
+      metrics
+    };
+  }
+
+  return null;
+}
+
+function extractEstimatedCct(ratePpm, metadata) {
+  const rawValue = metadata?.verificationData?.estimatedCCT ?? metadata?.estimateCCT;
+  const numericValue = rawValue !== undefined && rawValue !== null ? Number(rawValue) : NaN;
+  if (Number.isFinite(numericValue)) {
+    return Math.max(0, Math.round(numericValue));
+  }
+  return Math.round(ratePpmToCct(ratePpm));
+}
+
+async function fetchMetadataBundle(rawUri) {
+  const metadataUri = decodeBytesToString(rawUri);
+  if (!metadataUri) {
+    return { metadataUri: '', metadata: null, imageUrl: null };
+  }
+
+  let metadata = null;
+  let imageUrl = null;
+  const fetchUrl = toGatewayUrlMaybe(metadataUri);
+
+  if (!fetchUrl) {
+    return { metadataUri, metadata: null, imageUrl: null };
+  }
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 8000);
+
+  try {
+    console.log('[admin] Fetching metadata bundle from:', fetchUrl);
+    const response = await fetch(fetchUrl, { signal: controller.signal });
+    console.log('[admin] Metadata fetch status:', response.status);
+
+    if (response.ok) {
+      const parsed = await response.json();
+      console.log('[admin] Metadata fetch succeeded with keys:', Object.keys(parsed || {}));
+
+      if (parsed && typeof parsed === 'object') {
+        metadata = parsed;
+
+        if (parsed.image && typeof parsed.image === 'string') {
+          imageUrl = toGatewayUrlMaybe(parsed.image) || parsed.image;
+        }
+
+        if (parsed.attributes?.diseases && Array.isArray(parsed.attributes.diseases)) {
+          metadata.attributes.diseases = parsed.attributes.diseases.map((d) => {
+            if (d && typeof d === 'object' && typeof d.photo === 'string' && d.photo.startsWith('ipfs://')) {
+              return { ...d, photo: toGatewayUrlMaybe(d.photo) };
+            }
+            return d;
+          });
+        }
+      }
+    }
+  } catch (err) {
+    if (err?.name === 'AbortError') {
+      console.warn(`[admin] Metadata fetch timed out for ${metadataUri}`);
+    } else {
+      console.error('[admin] Failed to fetch metadata bundle:', err?.message || err);
+    }
+  } finally {
+    clearTimeout(timeout);
+  }
+
+  return { metadataUri, metadata, imageUrl };
+}
+
+const MICRO_UNITS = 1_000_000;
+const TOKENS_PER_CREDIT = 1;
+
+function ratePpmToCct(ratePpm = 0) {
+  if (!ratePpm) return 0;
+  return (ratePpm * TOKENS_PER_CREDIT) / MICRO_UNITS;
+}
+
 // ==================== AUTHENTICATION ====================
 
 // Super Admin Login
@@ -431,17 +617,36 @@ router.get('/verification/queue', requireVerificationAdmin, async (req, res) => 
     // Apply pagination
     const skip = (parseInt(page) - 1) * parseInt(limit);
     const paginatedRequests = allRequests.slice(skip, skip + parseInt(limit));
-    
-    // Format the requests for frontend
-    const formattedRequests = paginatedRequests.map(r => ({
-      id: r.id.toString(),
-      userId: r.requester,
-      username: r.requester.substring(0, 8) + '...',
-      location: { type: 'Point', coordinates: [0, 0] }, // Will be in metadata
-      metadata_uri: r.metadata_uri,
-      createdAt: new Date(parseInt(r.submitted_at) * 1000).toISOString(),
-      status: r.status === 1 ? 'PENDING' : (r.status === 2 ? 'APPROVED' : 'REJECTED'),
-      estimatedCCT: r.rate_ppm > 0 ? Math.round(r.rate_ppm / 10000) : 10
+
+    const formattedRequests = await Promise.all(paginatedRequests.map(async (r) => {
+      const { metadataUri, metadata, imageUrl } = await fetchMetadataBundle(r.metadata_uri);
+      const metadataPayload = metadata || {};
+      const location = extractLocation(metadataPayload);
+      const aiDecision = extractAiDecision(metadataPayload) || {};
+      const estimatedCCT = extractEstimatedCct(r.rate_ppm, metadataPayload);
+      const treeName = metadataPayload.form?.name || metadataPayload.attributes?.name || null;
+      const speciesCommon = metadataPayload.form?.speciesCommon || metadataPayload.attributes?.speciesCommon || null;
+
+      const formatted = {
+        id: r.id.toString(),
+        userId: r.requester,
+        username: r.requester.substring(0, 8) + '...',
+        location,
+        metadata_uri: metadataUri,
+        metadataUri,
+        imageUrl,
+        treeName,
+        speciesCommon,
+        createdAt: new Date(parseInt(r.submitted_at) * 1000).toISOString(),
+        status: r.status === 1 ? 'PENDING' : (r.status === 2 ? 'APPROVED' : 'REJECTED'),
+        estimatedCCT,
+        aiDecision,
+        metadata: metadataPayload
+      };
+
+      console.log('[admin] Queue formatted item:', JSON.stringify({ id: formatted.id, treeName: formatted.treeName, estimatedCCT: formatted.estimatedCCT, location: formatted.location, hasAiDecision: !!formatted.aiDecision?.status }, null, 2));
+
+      return formatted;
     }));
 
     res.json({
@@ -506,41 +711,13 @@ router.get('/verification/requests/:id', requireVerificationAdmin, async (req, r
     const r = data[0].vec[0];
     console.log('[admin] Request data:', JSON.stringify(r));
 
-    // Decode metadata_uri from hex string to URL
-    let metadataUrl = '';
-    if (r.metadata_uri && r.metadata_uri.startsWith('0x')) {
-      try {
-        const hexString = r.metadata_uri.substring(2);
-        const bytes = [];
-        for (let i = 0; i < hexString.length; i += 2) {
-          bytes.push(parseInt(hexString.substr(i, 2), 16));
-        }
-        metadataUrl = new TextDecoder().decode(new Uint8Array(bytes));
-        console.log('[admin] Decoded metadata URL:', metadataUrl);
-      } catch (err) {
-        console.error('[admin] Failed to decode metadata_uri:', err);
-      }
-    }
-
-    // Fetch metadata from URL if available
-    let metadata = {};
-    if (metadataUrl && (metadataUrl.startsWith('http') || metadataUrl.startsWith('ipfs'))) {
-      try {
-        // Convert IPFS URLs to gateway URLs
-        const fetchUrl = metadataUrl.startsWith('ipfs://')
-          ? metadataUrl.replace('ipfs://', 'https://ipfs.io/ipfs/')
-          : metadataUrl;
-        
-        console.log('[admin] Fetching metadata from:', fetchUrl);
-        const metaResponse = await fetch(fetchUrl);
-        if (metaResponse.ok) {
-          metadata = await metaResponse.json();
-          console.log('[admin] Metadata fetched:', JSON.stringify(metadata));
-        }
-      } catch (err) {
-        console.error('[admin] Failed to fetch metadata:', err);
-      }
-    }
+    const { metadataUri, metadata, imageUrl } = await fetchMetadataBundle(r.metadata_uri);
+    const metadataPayload = metadata || {};
+    const location = extractLocation(metadataPayload);
+    const aiDecision = extractAiDecision(metadataPayload) || {};
+    const estimatedCCT = extractEstimatedCct(r.rate_ppm, metadataPayload);
+    const treeName = metadataPayload.form?.name || metadataPayload.attributes?.name || null;
+    const speciesCommon = metadataPayload.form?.speciesCommon || metadataPayload.attributes?.speciesCommon || null;
 
     res.json({
       id: r.id.toString(),
@@ -549,12 +726,16 @@ router.get('/verification/requests/:id', requireVerificationAdmin, async (req, r
         username: r.requester.substring(0, 8) + '...',
         role: 'user'
       },
-      location: metadata.location || { type: 'Point', coordinates: [0, 0] },
-      aiDecision: metadata.aiDecision || {},
+      location,
+      aiDecision,
       createdAt: new Date(parseInt(r.submitted_at) * 1000).toISOString(),
       status: r.status === 1 ? 'PENDING' : (r.status === 2 ? 'APPROVED' : 'REJECTED'),
-      estimatedCCT: r.rate_ppm > 0 ? Math.round(r.rate_ppm / 10000) : 10,
-      metadata: metadata
+  estimatedCCT,
+  metadata: metadataPayload,
+      metadataUri,
+      imageUrl,
+      treeName,
+      speciesCommon
     });
   } catch (err) {
     console.error('[admin] Request details error:', err);
@@ -585,8 +766,8 @@ router.post('/verification/requests/:id/approve', requireVerificationAdmin, asyn
       });
     }
 
-    // Convert CCT to rate_ppm (CCT * 10000)
-    const ratePpm = Math.round(cctGrant * 10000);
+  // Convert CCT to rate_ppm legacy field (CCT * 1_000_000)
+  const ratePpm = Math.round(cctGrant * 1000000);
 
     console.log('[admin] Approving request on blockchain:', { requestId, cctGrant, ratePpm });
 
@@ -622,19 +803,38 @@ router.post('/verification/requests/:id/approve', requireVerificationAdmin, asyn
 
     console.log('[admin] Transaction submitted:', committedTxn.hash);
 
-    // Wait for transaction confirmation
+    // Wait for transaction confirmation and capture detailed status
+    let executedTransaction;
     try {
-      const executedTransaction = await aptosClient.waitForTransaction(committedTxn.hash);
-      console.log('[admin] Transaction confirmed:', JSON.stringify(executedTransaction));
-      
-      // Check if transaction was successful
-      if (executedTransaction && executedTransaction.success === false) {
-        throw new Error('Transaction failed on blockchain');
-      }
+      executedTransaction = await aptosClient.waitForTransactionWithResult(committedTxn.hash, { checkSuccess: true });
+      console.log('[admin] Transaction confirmed:', JSON.stringify({ hash: committedTxn.hash, success: executedTransaction.success, vmStatus: executedTransaction.vm_status }));
     } catch (waitError) {
       console.error('[admin] Error waiting for transaction:', waitError);
-      // Transaction was submitted but we couldn't confirm it immediately
-      // This might be okay - the transaction could still be processing
+
+      const vmStatus = waitError?.transaction?.vm_status || waitError?.vm_status || (typeof waitError?.message === 'string' ? waitError.message : '');
+
+      if (typeof vmStatus === 'string' && vmStatus.includes('E_NOT_VALIDATOR')) {
+        return res.status(403).json({
+          error: 'Approval failed on-chain: admin wallet is not registered as a validator. Grant the validator role to this admin address and retry.'
+        });
+      }
+
+      if (typeof vmStatus === 'string' && vmStatus.length > 0) {
+        return res.status(500).json({
+          error: `On-chain approval failed: ${vmStatus}`
+        });
+      }
+
+      return res.status(500).json({
+        error: 'Failed to confirm approval transaction.'
+      });
+    }
+
+    if (!executedTransaction?.success) {
+      const vmStatus = executedTransaction?.vm_status || 'Transaction aborted without VM status.';
+      return res.status(500).json({
+        error: `On-chain approval failed: ${vmStatus}`
+      });
     }
 
     // Fetch the approved request details from blockchain
@@ -812,18 +1012,37 @@ router.post('/verification/requests/:id/reject', requireVerificationAdmin, async
 
     console.log('[admin] Transaction submitted:', committedTxn.hash);
 
-    // Wait for transaction confirmation
+    let executedTransaction;
     try {
-      const executedTransaction = await aptosClient.waitForTransaction(committedTxn.hash);
-      console.log('[admin] Transaction confirmed:', JSON.stringify(executedTransaction));
-      
-      // Check if transaction was successful
-      if (executedTransaction && executedTransaction.success === false) {
-        throw new Error('Transaction failed on blockchain');
-      }
+      executedTransaction = await aptosClient.waitForTransactionWithResult(committedTxn.hash, { checkSuccess: true });
+      console.log('[admin] Transaction confirmed:', JSON.stringify({ hash: committedTxn.hash, success: executedTransaction.success, vmStatus: executedTransaction.vm_status }));
     } catch (waitError) {
       console.error('[admin] Error waiting for transaction:', waitError);
-      // Transaction was submitted but we couldn't confirm it immediately
+
+      const vmStatus = waitError?.transaction?.vm_status || waitError?.vm_status || (typeof waitError?.message === 'string' ? waitError.message : '');
+
+      if (typeof vmStatus === 'string' && vmStatus.includes('E_NOT_VALIDATOR')) {
+        return res.status(403).json({
+          error: 'Rejection failed on-chain: admin wallet is not registered as a validator. Grant the validator role to this admin address and retry.'
+        });
+      }
+
+      if (typeof vmStatus === 'string' && vmStatus.length > 0) {
+        return res.status(500).json({
+          error: `On-chain rejection failed: ${vmStatus}`
+        });
+      }
+
+      return res.status(500).json({
+        error: 'Failed to confirm rejection transaction.'
+      });
+    }
+
+    if (!executedTransaction?.success) {
+      const vmStatus = executedTransaction?.vm_status || 'Transaction aborted without VM status.';
+      return res.status(500).json({
+        error: `On-chain rejection failed: ${vmStatus}`
+      });
     }
 
     // Fetch the rejected request details from blockchain

@@ -21,6 +21,9 @@ const eslintConfig = [
       "next-env.d.ts",
       // Ignore server code; Next.js plugin is for the frontend only
       "backend/**",
+      ".venv/**",
+      "venv/**",
+      "ai-service/.venv/**",
     ],
   },
 ];

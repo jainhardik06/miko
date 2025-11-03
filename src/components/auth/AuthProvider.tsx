@@ -43,7 +43,7 @@ function writeStoredToken(token: string | null){
 }
 
 export function AuthProvider({ children }:{ children: React.ReactNode }){
-  const [token, setToken] = useState<string | null>(()=> readStoredToken());
+  const [token, setToken] = useState<string | null>(null);
   const [user, setUser] = useState<AuthenticatedUser | null>(null);
   const [methods, setMethods] = useState<AuthMethodsSummary | null>(null);
   const [loading, setLoading] = useState(true);
@@ -69,6 +69,14 @@ export function AuthProvider({ children }:{ children: React.ReactNode }){
   },[]);
 
   useEffect(()=>{ loadProfile(token); }, [token, loadProfile]);
+
+  useEffect(()=>{
+    // Hydration-safe read of persisted token once client mounts
+    const stored = readStoredToken();
+    if (stored !== null) {
+      setToken(stored);
+    }
+  }, []);
 
   useEffect(()=>{
     const handler = (e: StorageEvent)=>{

@@ -11,6 +11,18 @@ const aptos = new Aptos(config);
 
 const MODULE_ADDRESS = process.env.MODULE_ADDRESS || '0x6a6677bb2559869550af7ddf5303810731f4846a29bb3d0423d3ff1a26d78876';
 
+const MICRO_UNITS = 1_000_000;
+const TOKENS_PER_CREDIT = 1;
+
+function ratePpmToCredits(ratePpm = 0) {
+  if (!Number.isFinite(ratePpm)) return 0;
+  return Math.max(0, Math.round(ratePpm / MICRO_UNITS));
+}
+
+function ratePpmToTokens(ratePpm = 0) {
+  return ratePpmToCredits(ratePpm) * TOKENS_PER_CREDIT;
+}
+
 // Helper to normalize blockchain data
 function bytesToString(bytes) {
   // Handle array of bytes
@@ -59,7 +71,10 @@ function normalizeTree(raw) {
     status: Number(raw.status || 0),
     metadata_uri: bytesToString(raw.metadata_uri),
     cumulative_claimed: Number(raw.cumulative_claimed || 0),
-    pending: 0
+    created_at: Number(raw.created_at || 0),
+    last_claim: Number(raw.last_claim || 0),
+    granted_ccr: ratePpmToCredits(Number(raw.rate_ppm || 0)),
+    granted_cct: ratePpmToTokens(Number(raw.rate_ppm || 0))
   };
 }
 
@@ -71,6 +86,8 @@ function normalizeRequest(raw) {
     submitted_at: Number(raw.submitted_at || 0),
     status: Number(raw.status || 0),
     rate_ppm: Number(raw.rate_ppm || 0),
+    granted_ccr: ratePpmToCredits(Number(raw.rate_ppm || 0)),
+    granted_cct: ratePpmToTokens(Number(raw.rate_ppm || 0))
   };
 }
 
@@ -99,26 +116,39 @@ router.get('/trees', async (req, res) => {
       return res.json({ trees: cache.trees.data, cached: true });
     }
 
-    // Fetch from blockchain - iterate through tree IDs
+    // Fetch trees directly from the Trees resource using REST API
+    // This bypasses the need for view functions
     const trees = [];
-    const maxTrees = 200;
     
-    for (let id = 0; id < maxTrees; id++) {
-      try {
-        const result = await aptos.view({
-          payload: {
-            function: `${MODULE_ADDRESS}::tree_nft::get_tree`,
-            typeArguments: [],
-            functionArguments: [id]
-          }
-        });
-
-        if (!result || !result[0]) break; // No more trees
-        trees.push(normalizeTree(result[0]));
-      } catch (error) {
-        // Tree doesn't exist, stop iteration
-        break;
+    try {
+      // Use the base fullnode URL without version path
+      let base = process.env.APTOS_NODE_URL || 'https://fullnode.devnet.aptoslabs.com';
+      // Remove trailing /v1 if present
+      base = base.replace(/\/v1\/?$/, '');
+      
+      const resourceType = encodeURIComponent(`${MODULE_ADDRESS}::tree_nft::Trees`);
+      const url = `${base}/v1/accounts/${MODULE_ADDRESS}/resource/${resourceType}`;
+      
+      console.log('[Blockchain] Fetching trees from:', url);
+      const response = await fetch(url);
+      
+      if (response.ok) {
+        const data = await response.json();
+        const treesData = data?.data?.inner || [];
+        
+        console.log('[Blockchain] Found', treesData.length, 'trees in resource');
+        
+        // Normalize each tree
+        for (const treeRaw of treesData) {
+          trees.push(normalizeTree(treeRaw));
+        }
+      } else {
+        const errorText = await response.text();
+        console.warn('[Blockchain] Trees resource response:', response.status, errorText);
       }
+    } catch (error) {
+      console.error('[Blockchain] Error fetching Trees resource:', error);
+      // Continue with empty array
     }
     
     // Update cache
@@ -152,17 +182,39 @@ router.get('/requests', async (req, res) => {
       return res.json({ requests: cache.requests.data, cached: true });
     }
 
-    // Fetch ALL requests at once using get_all_requests (more efficient!)
-    const result = await aptos.view({
-      payload: {
-        function: `${MODULE_ADDRESS}::tree_requests::get_all_requests`,
-        typeArguments: [],
-        functionArguments: []
+    // Fetch requests directly from the Requests resource using REST API
+    const requests = [];
+    
+    try {
+      // Use the base fullnode URL without version path
+      let base = process.env.APTOS_NODE_URL || 'https://fullnode.devnet.aptoslabs.com';
+      // Remove trailing /v1 if present
+      base = base.replace(/\/v1\/?$/, '');
+      
+      const resourceType = encodeURIComponent(`${MODULE_ADDRESS}::tree_requests::Requests`);
+      const url = `${base}/v1/accounts/${MODULE_ADDRESS}/resource/${resourceType}`;
+      
+      console.log('[Blockchain] Fetching requests from:', url);
+      const response = await fetch(url);
+      
+      if (response.ok) {
+        const data = await response.json();
+        const requestsData = data?.data?.entries || [];
+        
+        console.log('[Blockchain] Found', requestsData.length, 'requests in resource');
+        
+        // Normalize each request
+        for (const requestRaw of requestsData) {
+          requests.push(normalizeRequest(requestRaw));
+        }
+      } else {
+        const errorText = await response.text();
+        console.warn('[Blockchain] Requests resource response:', response.status, errorText);
       }
-    });
-
-    const rawRequests = result[0] || [];
-    const requests = rawRequests.map(r => normalizeRequest(r));
+    } catch (error) {
+      console.error('[Blockchain] Error fetching Requests resource:', error);
+      // Continue with empty array
+    }
     
     // Update cache
     cache.requests.data = requests;

@@ -12,7 +12,7 @@ module miko::oracle {
 
 	public entry fun init(admin: &signer) {
 		roles::assert_admin(signer::address_of(admin));
-	move_to(admin, Events { rate_updates: account::new_event_handle<RateUpdate>(admin) });
+		move_to(admin, Events { rate_updates: account::new_event_handle<RateUpdate>(admin) });
 	}
 
 	public entry fun set_rate(oracle_signer: &signer, tree_id: u64, new_rate_ppm: u64) acquires Events {

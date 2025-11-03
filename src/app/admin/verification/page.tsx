@@ -26,7 +26,42 @@ export default function VerificationQueuePage() {
   const loadQueue = async () => {
     try {
       const data = await getVerificationQueue(1, 50);
-      setRequests(data.requests);
+      const enriched = await Promise.all(
+  data.requests.map(async (request: TreeRequest) => {
+          const needsHydration =
+            !request.treeName ||
+            !request.speciesCommon ||
+            !request.aiDecision?.status ||
+            !request.location ||
+            request.location.coordinates.every((coord) => coord === 0) ||
+            !request.estimatedCCT ||
+            request.estimatedCCT === 0;
+
+          if (!needsHydration) {
+            return request;
+          }
+
+          try {
+            const details = await getRequestDetails(request.id);
+            return {
+              ...request,
+              location: details.location || request.location,
+              aiDecision: details.aiDecision || request.aiDecision,
+              estimatedCCT: details.estimatedCCT || request.estimatedCCT,
+              treeName: details.treeName || request.treeName,
+              speciesCommon: details.speciesCommon || request.speciesCommon,
+              metadata: details.metadata || request.metadata,
+              metadataUri: details.metadataUri || request.metadataUri,
+              imageUrl: details.imageUrl ?? request.imageUrl,
+              user: details.user || request.user,
+            } satisfies TreeRequest;
+          } catch (err) {
+            console.warn('[admin] Failed to hydrate queue item', request.id, err);
+            return request;
+          }
+        })
+      );
+      setRequests(enriched);
     } catch (err: any) {
       push({ message: err.message || 'Failed to load queue', type: 'error' });
     } finally {
@@ -116,15 +151,20 @@ export default function VerificationQueuePage() {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-neutral-800/60">
-                    {requests.map((request) => (
+                    {requests.map((request: TreeRequest) => (
                       <tr key={request.id} className="hover:bg-neutral-800/20 transition-colors">
                         <td className="px-6 py-4">
-                          <div className="text-sm text-white">{request.username || 'Unknown'}</div>
-                          <div className="text-xs text-neutral-500">{request.userId?.slice(0, 8)}...</div>
+                          <div className="text-sm text-white">{request.treeName || request.username || 'Unknown'}</div>
+                          <div className="text-xs text-neutral-500">
+                            {request.speciesCommon ? `${request.speciesCommon} · ` : ''}
+                            {request.userId ? `${request.userId.slice(0, 8)}...` : (request.username || 'N/A')}
+                          </div>
                         </td>
                         <td className="px-6 py-4">
                           <div className="text-sm text-neutral-300">
-                            {request.location.coordinates[1].toFixed(4)}, {request.location.coordinates[0].toFixed(4)}
+                            {request.location?.coordinates?.every((coord: number) => coord === 0)
+                              ? 'Pending'
+                              : `${request.location.coordinates[1].toFixed(4)}, ${request.location.coordinates[0].toFixed(4)}`}
                           </div>
                         </td>
                         <td className="px-6 py-4">
@@ -203,6 +243,21 @@ function ReviewModal({
   const [rejectReason, setRejectReason] = useState('');
   const [mode, setMode] = useState<'review' | 'approve' | 'reject'>('review');
 
+  const formDetails: Record<string, any> = request.metadata?.form || {};
+  const attrDetails: Record<string, any> = request.metadata?.attributes || {};
+  const displayName: string | undefined = request.treeName || formDetails.name || attrDetails.name;
+  const displaySpecies: string | undefined = request.speciesCommon || formDetails.speciesCommon || attrDetails.speciesCommon;
+  const displayScientific: string | undefined = formDetails.speciesScientific || attrDetails.speciesScientific;
+  const displayAge = formDetails.age ?? attrDetails.age;
+  const displayHeight = formDetails.heightM ?? attrDetails.heightM;
+  const displayGirth = formDetails.girthCm ?? attrDetails.girthCm;
+  const displayNotes: string | undefined = formDetails.details || attrDetails.details;
+  const diseaseList: Array<Record<string, any>> = Array.isArray(attrDetails.diseases)
+    ? attrDetails.diseases
+    : Array.isArray(formDetails.diseases)
+      ? formDetails.diseases
+      : [];
+
   const handleApproveSubmit = () => {
     const amount = parseInt(cctGrant);
     if (isNaN(amount) || amount <= 0) {
@@ -269,6 +324,81 @@ function ReviewModal({
                   Lat: {request.location.coordinates[1].toFixed(6)}, Lon: {request.location.coordinates[0].toFixed(6)}
                 </div>
               </div>
+
+              {(displayName || displaySpecies || displayScientific || displayAge != null || displayHeight != null || displayGirth != null || displayNotes || diseaseList.length > 0) && (
+                <div className="bg-neutral-800/40 rounded-lg p-4">
+                  <h3 className="text-sm font-medium text-neutral-300 mb-3">Tree Details</h3>
+                  <div className="grid grid-cols-2 gap-4 text-sm">
+                    {displayName && (
+                      <div>
+                        <span className="text-neutral-500">Tree Name:</span>
+                        <div className="text-white mt-1">{displayName}</div>
+                      </div>
+                    )}
+                    {displaySpecies && (
+                      <div>
+                        <span className="text-neutral-500">Species:</span>
+                        <div className="text-white mt-1">{displaySpecies}</div>
+                      </div>
+                    )}
+                    {displayScientific && (
+                      <div>
+                        <span className="text-neutral-500">Scientific:</span>
+                        <div className="text-white mt-1">{displayScientific}</div>
+                      </div>
+                    )}
+                    {displayAge != null && (
+                      <div>
+                        <span className="text-neutral-500">Approx. Age:</span>
+                        <div className="text-white mt-1">{displayAge}</div>
+                      </div>
+                    )}
+                    {displayHeight != null && (
+                      <div>
+                        <span className="text-neutral-500">Height (m):</span>
+                        <div className="text-white mt-1">{displayHeight}</div>
+                      </div>
+                    )}
+                    {displayGirth != null && (
+                      <div>
+                        <span className="text-neutral-500">Girth (cm):</span>
+                        <div className="text-white mt-1">{displayGirth}</div>
+                      </div>
+                    )}
+                    {displayNotes && (
+                      <div className="col-span-2">
+                        <span className="text-neutral-500">Notes:</span>
+                        <p className="text-sm text-white mt-1 whitespace-pre-wrap">{displayNotes}</p>
+                      </div>
+                    )}
+                    {diseaseList.length > 0 && (
+                      <div className="col-span-2">
+                        <span className="text-neutral-500 block mb-2">Reported Diseases:</span>
+                        <div className="space-y-2">
+                          {diseaseList.map((disease, idx) => (
+                            <div key={idx} className="border border-neutral-700/40 rounded-lg p-3">
+                              <div className="text-white font-medium">{disease.name || `Entry ${idx + 1}`}</div>
+                              {disease.appearance && (
+                                <div className="text-xs text-neutral-400 mt-1">{disease.appearance}</div>
+                              )}
+                              {typeof disease.photo === 'string' && disease.photo && (
+                                <a
+                                  href={disease.photo}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                  className="text-xs text-emerald-400 hover:underline mt-2 inline-block"
+                                >
+                                  View photo
+                                </a>
+                              )}
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
 
               {/* AI Decision */}
               <div className="bg-neutral-800/40 rounded-lg p-4">

@@ -16,7 +16,6 @@ module miko::tree_nft {
     const E_NOT_ORACLE: u64 = 2;
     const E_BAD_STATUS: u64 = 3;
     const E_INVALID_TREE: u64 = 4;
-    const E_CANNOT_DECREASE_GRANT: u64 = 5;
 
     /// Tree status codes
     const STATUS_ACTIVE: u8 = 1;
@@ -28,7 +27,7 @@ module miko::tree_nft {
         owner: address,
         created_at: u64,
         last_claim: u64,
-        rate_ppm: u64,
+        rate_ppm: u64, // micro CCT per second
         status: u8,
         metadata_uri: vector<u8>,
         cumulative_claimed: u64,
@@ -74,38 +73,29 @@ module miko::tree_nft {
     }
 
     /// Legacy combined mint kept for backwards compatibility (may be deprecated)
-    public entry fun approve_and_mint(validator: &signer, owner: address, metadata_uri: vector<u8>, granted_cct: u64) acquires Trees, Events {
+    public entry fun approve_and_mint(validator: &signer, owner: address, metadata_uri: vector<u8>, rate_ppm: u64) acquires Trees, Events {
         let vaddr = signer::address_of(validator);
         assert!(roles::is_validator(vaddr), E_NOT_VALIDATOR);
-        internal_mint(owner, metadata_uri, granted_cct);
+        internal_mint(owner, metadata_uri, rate_ppm);
     }
 
     /// Internal friend call for tree_requests to mint after approval.
-    public(friend) fun mint_by_validator_internal(_validator: &signer, owner: address, metadata_uri: vector<u8>, granted_cct: u64): u64 acquires Trees, Events {
-        internal_mint(owner, metadata_uri, granted_cct)
+    public(friend) fun mint_by_validator_internal(_validator: &signer, owner: address, metadata_uri: vector<u8>, rate_ppm: u64): u64 acquires Trees, Events {
+        internal_mint(owner, metadata_uri, rate_ppm)
     }
 
-    public entry fun set_rate(oracle: &signer, id: u64, new_amount: u64) acquires Trees, Events {
+    public entry fun set_rate(oracle: &signer, id: u64, new_rate_ppm: u64) acquires Trees, Events {
         let oaddr = signer::address_of(oracle);
         assert!(roles::is_oracle(oaddr), E_NOT_ORACLE);
-        set_rate_internal(id, new_amount);
+        set_rate_internal(id, new_rate_ppm);
     }
 
-    public(friend) fun set_rate_internal(id: u64, new_amount: u64) acquires Trees, Events {
+    public(friend) fun set_rate_internal(id: u64, new_rate_ppm: u64) acquires Trees, Events {
         let trees = borrow_global_mut<Trees>(@admin);
         let (tree_ref, _) = borrow_tree_mut(trees, id);
-        let old = tree_ref.rate_ppm;
-        assert!(new_amount >= old, E_CANNOT_DECREASE_GRANT);
-        if (new_amount == old) return;
-
-        let delta = new_amount - old;
-        tree_ref.rate_ppm = new_amount;
-        tree_ref.cumulative_claimed = tree_ref.cumulative_claimed + delta;
-        tree_ref.last_claim = timestamp::now_seconds();
-        cct::mint_to_address(tree_ref.owner, delta);
-
+        let old = tree_ref.rate_ppm; tree_ref.rate_ppm = new_rate_ppm;
         let ev = borrow_global_mut<Events>(@admin);
-        event::emit_event(&mut ev.rate_set, RateSet { id, old_rate: old, new_rate: new_amount });
+        event::emit_event(&mut ev.rate_set, RateSet { id, old_rate: old, new_rate: new_rate_ppm });
     }
 
     public entry fun pause_for_reverify(validator: &signer, id: u64) acquires Trees, Events {
@@ -132,12 +122,15 @@ module miko::tree_nft {
         let (tree_ref, _) = borrow_tree_mut(trees, id);
         assert!(tree_ref.owner == addr, E_INVALID_TREE);
         assert!(tree_ref.status == STATUS_ACTIVE, E_BAD_STATUS);
-        tree_ref.last_claim = timestamp::now_seconds();
+        let now = timestamp::now_seconds();
+        let pending = (now - tree_ref.last_claim) * tree_ref.rate_ppm / 1_000_000;
+        tree_ref.last_claim = now;
+        tree_ref.cumulative_claimed = tree_ref.cumulative_claimed + pending;
+        cct::mint_to_address(addr, pending);
         let ev = borrow_global_mut<Events>(@admin);
-        event::emit_event(&mut ev.claimed, Claimed { id, owner: addr, amount: 0 });
+        event::emit_event(&mut ev.claimed, Claimed { id, owner: addr, amount: pending });
     }
 
-    #[view]
     public fun get_tree(id: u64): Option<TreeView> acquires Trees {
         if (!exists<Trees>(@admin)) return option::none<TreeView>();
         let trees = borrow_global<Trees>(@admin);
@@ -179,8 +172,10 @@ module miko::tree_nft {
 
     public fun pending_amount(id: u64): u64 acquires Trees {
         let trees = borrow_global<Trees>(@admin);
-        borrow_tree(trees, id);
-        0
+        let (t_ref, _) = borrow_tree(trees, id);
+        if (t_ref.status != STATUS_ACTIVE) return 0;
+        let now = timestamp::now_seconds();
+        (now - t_ref.last_claim) * t_ref.rate_ppm / 1_000_000
     }
 
     fun borrow_tree(trees: &Trees, id: u64): (&Tree, u64) {
@@ -205,29 +200,13 @@ module miko::tree_nft {
         abort E_INVALID_TREE
     }
 
-    fun internal_mint(owner: address, metadata_uri: vector<u8>, granted_cct: u64): u64 acquires Trees, Events {
+    fun internal_mint(owner: address, metadata_uri: vector<u8>, rate_ppm: u64): u64 acquires Trees, Events {
         let trees = borrow_global_mut<Trees>(@admin);
-        let id = trees.next_id;
-        trees.next_id = id + 1;
+        let id = trees.next_id; trees.next_id = id + 1;
         let now = timestamp::now_seconds();
-
-        // Immediately mint the granted CCT amount to the owner (no accrual mechanics).
-        cct::mint_to_address(owner, granted_cct);
-
-        vector::push_back(&mut trees.inner, Tree {
-            id,
-            owner,
-            created_at: now,
-            last_claim: now,
-            rate_ppm: granted_cct,
-            status: STATUS_ACTIVE,
-            metadata_uri,
-            cumulative_claimed: granted_cct,
-        });
-
+        vector::push_back(&mut trees.inner, Tree { id, owner, created_at: now, last_claim: now, rate_ppm, status: STATUS_ACTIVE, metadata_uri, cumulative_claimed: 0 });
         let ev = borrow_global_mut<Events>(@admin);
-        event::emit_event(&mut ev.tree_minted, TreeMinted { id, owner, rate_ppm: granted_cct });
+        event::emit_event(&mut ev.tree_minted, TreeMinted { id, owner, rate_ppm });
         id
     }
 }
-

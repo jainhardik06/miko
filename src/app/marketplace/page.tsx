@@ -2,7 +2,7 @@
 import dynamic from 'next/dynamic';
 const HeroScene = dynamic(()=>import('@/components/HeroScene'), { ssr:false, loading: ()=> <div className="h-[60vh] flex items-center justify-center text-xs text-neutral-500">Loading scene…</div> });
 import { useEffect, useMemo, useState } from 'react';
-import { fetchListings, buyCCT, fetchListing, Listing, TxResult } from '@/lib/aptos';
+import { fetchListings, buyCCT, fetchListing, Listing, TxResult, MICRO_UNITS } from '@/lib/aptos';
 import { useToast } from '@/components/ToastProvider';
 import { useMikoStore } from '@/state/store';
 
@@ -21,8 +21,8 @@ export default function MarketplacePage() {
   // UI model: enrich listings with profile-like details for display
   type UIListing = Listing & { username: string; location: string; demo?: boolean };
   const staticDemo: UIListing[] = useMemo(()=>[
-    { id: -1, seller: '0xDEMO01', remaining: 120, unit_price: 12, created_at: Date.now(), username: 'Gopal Sharma', location: 'Jaipur, Rajasthan', demo: true },
-    { id: -2, seller: '0xDEMO02', remaining: 75, unit_price: 15, created_at: Date.now(), username: 'Priya Verma', location: 'Bikaner, Rajasthan', demo: true },
+    { id: -1, seller: '0xDEMO01', remaining_micro: 120 * MICRO_UNITS, remaining_tokens: 120, unit_price: 12, created_at: Date.now(), username: 'Gopal Sharma', location: 'Jaipur, Rajasthan', demo: true },
+    { id: -2, seller: '0xDEMO02', remaining_micro: 75 * MICRO_UNITS, remaining_tokens: 75, unit_price: 15, created_at: Date.now(), username: 'Priya Verma', location: 'Bikaner, Rajasthan', demo: true },
   ],[]);
 
   function addrToUsername(addr: string){
@@ -49,12 +49,15 @@ export default function MarketplacePage() {
     return [...staticDemo, ...enriched];
   },[listings, staticDemo]);
 
-  function parsePositiveInt(v: string, field: string, max?: number): number | null {
+  function parsePositiveInt(v: string, field: string, maxTokens?: number): number | null {
     if (!v.trim()) { setErrors(e=>({...e,[field]:'Required'})); return null; }
     if (!/^[0-9]+$/.test(v)) { setErrors(e=>({...e,[field]:'Digits only'})); return null; }
     const n = parseInt(v, 10);
     if (n <= 0) { setErrors(e=>({...e,[field]:'Must be > 0'})); return null; }
-    if (max && n > max) { setErrors(e=>({...e,[field]:`Max ${max}`})); return null; }
+    if (maxTokens !== undefined && n > maxTokens) {
+      setErrors(e=>({...e,[field]:`Max ${maxTokens}`}));
+      return null;
+    }
   setErrors(e=>{ const copy = { ...e }; delete (copy as Record<string,string>)[field]; return copy; });
     return n;
   }
@@ -151,7 +154,7 @@ export default function MarketplacePage() {
                       </td>
                       <td className="px-3 py-2 font-mono text-[10px]">{l.seller.slice(0,6)}…{l.seller.slice(-4)}</td>
                       <td className="px-3 py-2 text-xs text-neutral-300">{l.location}</td>
-                      <td className="px-3 py-2">{l.remaining}</td>
+                      <td className="px-3 py-2">{l.remaining_tokens.toLocaleString(undefined, { maximumFractionDigits: 0 })}</td>
                       <td className="px-3 py-2">₹ {l.unit_price}</td>
                       <td className="px-3 py-2 space-x-2">
                         {!l.demo && account && account!==l.seller && (
@@ -163,8 +166,8 @@ export default function MarketplacePage() {
                               className="w-16 bg-neutral-900 border border-neutral-700 rounded px-1 py-1 text-xs focus:outline-none"
                             />
                             <button
-                              onClick={()=>{ const raw = parsePositiveInt(quantities[l.id]||'0','qty'+l.id, l.remaining); if(raw==null) return; buy(l.id, raw); }}
-                              disabled={buyingId===l.id||l.remaining===0}
+                              onClick={()=>{ const raw = parsePositiveInt(quantities[l.id]||'0','qty'+l.id, Math.round(l.remaining_tokens)); if(raw==null) return; buy(l.id, raw); }}
+                              disabled={buyingId===l.id||l.remaining_tokens <= 0}
                               className="px-3 py-1 rounded bg-emerald-600 hover:bg-emerald-500 text-xs disabled:opacity-40"
                             >{buyingId===l.id?'Buying…':'Buy Now'}</button>
                           </>
@@ -197,7 +200,7 @@ export default function MarketplacePage() {
                   <div className="mt-4 flex items-center justify-between">
                     <div>
                       <div className="text-[11px] text-neutral-400">Tokens</div>
-                      <div className="text-lg font-semibold">{l.remaining}</div>
+                      <div className="text-lg font-semibold">{l.remaining_tokens.toLocaleString(undefined, { maximumFractionDigits: 0 })}</div>
                     </div>
                     <div>
                       <div className="text-[11px] text-neutral-400">Unit Price</div>
@@ -214,8 +217,8 @@ export default function MarketplacePage() {
                           className="w-20 bg-neutral-900 border border-neutral-700 rounded px-2 py-1 text-xs focus:outline-none"
                         />
                         <button
-                          onClick={()=>{ const raw = parsePositiveInt(quantities[l.id]||'0','qty'+l.id, l.remaining); if(raw==null) return; buy(l.id, raw); }}
-                          disabled={buyingId===l.id||l.remaining===0}
+                          onClick={()=>{ const raw = parsePositiveInt(quantities[l.id]||'0','qty'+l.id, Math.round(l.remaining_tokens)); if(raw==null) return; buy(l.id, raw); }}
+                          disabled={buyingId===l.id||l.remaining_tokens <= 0}
                           className="px-3 py-2 rounded bg-emerald-600 hover:bg-emerald-500 text-sm disabled:opacity-40"
                         >{buyingId===l.id?'Buying…':'Buy Now'}</button>
                       </>

@@ -1,0 +1,1 @@
+module miko::insurance_pool {}

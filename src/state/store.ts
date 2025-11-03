@@ -8,7 +8,10 @@ export interface Tree {
   status: number;
   metadata_uri: string;
   cumulative_claimed: number;
-  pending?: number;
+  created_at?: number;
+  last_claim?: number;
+  granted_ccr?: number;
+  granted_cct?: number;
 }
 
 interface RolesProfile {

@@ -3,15 +3,15 @@ import { useState } from 'react';
 
 const farmerSteps = [
   { title: 'Onboard & Submit', desc: 'Register land & upload geospatial + photographic evidence (to IPFS).' },
-  { title: 'Validation', desc: 'Validator reviews request; admin/oracle assigns emission rate (ppm).' },
-  { title: 'Accrual Stream', desc: 'Approved TreeNFT begins accruing CCT continuously.' },
-  { title: 'Claim & Optimize', desc: 'Farmer claims periodically to compound or list in marketplace.' },
-  { title: 'Liquidity Access', desc: 'Credits sold to industries seeking verified offsets.' }
+  { title: 'Validation', desc: 'Validator reviews request; admin approves the TreeNFT grant.' },
+  { title: 'Immediate Mint', desc: 'Approval mints the full CCT grant straight into the farmer’s wallet.' },
+  { title: 'List & Sell', desc: 'Farmer sets a listing at the fixed ₹500/CCT rate in the marketplace.' },
+  { title: 'Liquidity Access', desc: 'Credits are sold to industries seeking verified offsets.' }
 ];
 const industrySteps = [
-  { title: 'Connect & Discover', desc: 'Browse transparent listings & asset metadata (origin, species, rate).' },
-  { title: 'Due Diligence', desc: 'Inspect validation history, oracle rate events & claim frequency.' },
-  { title: 'Purchase Credits', desc: 'Execute on-chain buy; escrow releases CCT.' },
+  { title: 'Connect & Discover', desc: 'Browse transparent listings & asset metadata (origin, species, grant amount).' },
+  { title: 'Due Diligence', desc: 'Inspect validation history, grant records & monitoring data.' },
+  { title: 'Purchase Credits', desc: 'Execute on-chain buy; funds transfer instantly for the CCT lot.' },
   { title: 'Offset Accounting', desc: 'Track portfolio & retirement schedule in dashboard.' },
   { title: 'Reporting & Proofs', desc: 'Export cryptographic receipts & attestation bundles.' }
 ];

@@ -25,8 +25,9 @@ router.post('/upload', upload.single('file'), async (req, res) => {
     if (!cid) return res.status(502).json({ error: 'pin_failed', details: resp?.data });
     return res.json({ cid, ipfsUri: `ipfs://${cid}`, gatewayUrl: toGatewayUrl(cid) });
   } catch (e) {
-    console.error('[ipfs.upload] error', e?.response?.data || e?.message || e);
-    return res.status(500).json({ error: 'upload_failed' });
+    const detail = e?.response?.data || e?.message || e;
+    console.error('[ipfs.upload] error', detail);
+    return res.status(500).json({ error: 'upload_failed', detail });
   }
 });
 
@@ -45,8 +46,9 @@ router.post('/upload-json', async (req, res) => {
     if (!cid) return res.status(502).json({ error: 'pin_failed', details: resp?.data });
     return res.json({ cid, ipfsUri: `ipfs://${cid}`, gatewayUrl: toGatewayUrl(cid) });
   } catch (e) {
-    console.error('[ipfs.upload-json] error', e?.response?.data || e?.message || e);
-    return res.status(500).json({ error: 'upload_failed' });
+    const detail = e?.response?.data || e?.message || e;
+    console.error('[ipfs.upload-json] error', detail);
+    return res.status(500).json({ error: 'upload_failed', detail });
   }
 });
 
@@ -82,8 +84,9 @@ router.post('/upload-bundle', async (req, res) => {
       metadata: metaCid ? { cid: metaCid, ipfsUri: `ipfs://${metaCid}`, gatewayUrl: toGatewayUrl(metaCid) } : null
     });
   } catch (e) {
-    console.error('[ipfs.upload-bundle] error', e?.response?.data || e?.message || e);
-    return res.status(500).json({ error: 'upload_failed' });
+    const detail = e?.response?.data || e?.message || e;
+    console.error('[ipfs.upload-bundle] error', detail);
+    return res.status(500).json({ error: 'upload_failed', detail });
   }
 });
 

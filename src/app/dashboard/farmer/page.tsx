@@ -9,7 +9,7 @@ export default function FarmerDashboard() {
       <header className="flex flex-col md:flex-row md:items-end md:justify-between gap-6">
         <div>
           <h1 className="text-3xl font-semibold tracking-tight">Farmer Dashboard</h1>
-          <p className="mt-2 text-neutral-400 text-sm max-w-xl leading-relaxed">Manage your accruing TreeNFT assets, claim streaming CCT and prepare liquidity listings. Future versions will surface predictive yield analytics & variance risk signals.</p>
+          <p className="mt-2 text-neutral-400 text-sm max-w-xl leading-relaxed">Manage your approved TreeNFT grants, track minted CCT balances, and prepare marketplace listings. Future versions will surface predictive analytics & variance risk signals.</p>
         </div>
         <div className="flex gap-3">
           <button onClick={()=>setShowListModal(true)} className="px-5 py-2 rounded-md bg-emerald-600 hover:bg-emerald-500 text-sm font-medium shadow shadow-emerald-600/30">List Credits</button>

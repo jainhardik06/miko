@@ -41,6 +41,11 @@ export interface TreeRequest {
   reviewedBy?: string;
   reviewedAt?: string;
   cctGranted?: number;
+  metadataUri?: string;
+  metadata?: any;
+  imageUrl?: string | null;
+  treeName?: string | null;
+  speciesCommon?: string | null;
 }
 
 export interface DashboardStats {
