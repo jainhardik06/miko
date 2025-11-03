@@ -6,7 +6,7 @@ import { fetchWalletChallenge, linkEmailRequest, linkEmailVerify, linkWallet, li
 import { connectPetra, signMessagePetra } from '../../lib/petra';
 import ThemeToggle from '../../components/ThemeToggle';
 import { MODULE_ADDRESS, getConfig } from '../../config';
-import type { Tree, Request } from '../../lib/aptos';
+import type { Tree, Request, Listing } from '../../lib/aptos';
 import { getCCTBalance, ratePpmToTokens, microToTokens, getPendingCCT, buildClaimPendingTx, fetchListings, tokensToMicro } from '../../lib/aptos';
 import { aptos as aptosClient } from '../../state/store';
 import React from 'react';
@@ -62,6 +62,10 @@ export default function ProfilePage(){
   const [claimingPending, setClaimingPending] = useState(false);
   const [pendingClaimAttempted, setPendingClaimAttempted] = useState(false);
   const [listedCct, setListedCct] = useState<number>(0);
+  const [userListings, setUserListings] = useState<Listing[]>([]);
+  const [listingModalOpen, setListingModalOpen] = useState(false);
+  const [activeListing, setActiveListing] = useState<Listing | null>(null);
+  const [removingListingId, setRemovingListingId] = useState<number | null>(null);
   
   // Details modal state
   const [showDetailsModal, setShowDetailsModal] = useState(false);
@@ -120,16 +124,19 @@ export default function ProfilePage(){
       const target = (addressOverride || walletAddr)?.toLowerCase();
       if (!target) {
         setListedCct(0);
+        setUserListings([]);
         return;
       }
 
       const listings = await fetchListings();
-      const totalMicro = listings
-        .filter(l => l.seller.toLowerCase() === target)
-        .reduce((sum, l) => sum + l.remaining_micro, 0);
+      const mine = listings.filter((l) => l.seller.toLowerCase() === target);
+      const totalMicro = mine.reduce((sum, l) => sum + l.remaining_micro, 0);
       setListedCct(microToTokens(totalMicro));
+      setUserListings(mine);
     } catch (error) {
       console.error('[Profile] Failed to load marketplace listings:', error);
+      setUserListings([]);
+      setListedCct(0);
     }
   }, [walletAddr]);
 
@@ -356,6 +363,53 @@ export default function ProfilePage(){
     }
   };
 
+  const handleRemoveListing = useCallback(async (listing: Listing) => {
+    if (!walletAddr) return;
+    const provider: any = typeof window !== 'undefined' ? ((window as any).petra || (window as any).aptos) : null;
+    if (!provider?.signAndSubmitTransaction) {
+      alert('Petra wallet not available. Please connect your wallet.');
+      return;
+    }
+
+    setRemovingListingId(listing.id);
+    try {
+      const payload: any = {
+        type: 'entry_function_payload',
+        function: `${MODULE_ADDRESS}::marketplace::delist`,
+        type_arguments: [],
+        arguments: [String(listing.id)],
+      };
+      const now = Math.floor(Date.now() / 1000);
+      const opts: any = {
+        maxGasAmount: '200000',
+        gasUnitPrice: '100',
+        expirationTimestampSecs: String(now + 600),
+        estimateGasUnitPrice: false,
+        estimateMaxGasAmount: false,
+        estimatePrioritizedGasUnitPrice: false,
+      };
+
+      const result = await provider.signAndSubmitTransaction(payload, opts);
+      console.log('Delisting transaction submitted:', result);
+      if (result?.hash) {
+        await aptosClient.waitForTransaction({ transactionHash: result.hash });
+      }
+
+      const latestBalance = await getCCTBalance(walletAddr);
+      setCctBalance(latestBalance);
+      await refreshListedTokens(walletAddr);
+      await loadFromBlockchain(walletAddr, true);
+      setListingModalOpen(false);
+      setActiveListing(null);
+      alert(`Listing #${listing.id} removed. Tokens returned to your wallet.`);
+    } catch (error: any) {
+      console.error('Failed to remove listing:', error);
+      alert(error?.message || 'Failed to remove listing');
+    } finally {
+      setRemovingListingId(null);
+    }
+  }, [walletAddr, refreshListedTokens, loadFromBlockchain]);
+
   return (
     <div className="mx-auto max-w-6xl px-4 py-12">
       <h1 className="text-3xl font-bold mb-6">Profile</h1>
@@ -511,6 +565,57 @@ export default function ProfilePage(){
       </section>
 
       <section className="mb-8 rounded-2xl border border-white/10 bg-white/5 p-5">
+        <div className="flex items-center justify-between mb-4 gap-3 flex-wrap">
+          <h2 className="text-lg font-semibold">Marketplace Listings</h2>
+          <span className="text-xs text-neutral-500">Tokens escrowed: {formatTokens(listedCct)}</span>
+        </div>
+        {walletAddr ? (
+          userListings.length === 0 ? (
+            <div className="text-sm text-neutral-400">No active listings in the marketplace.</div>
+          ) : (
+            <div className="overflow-x-auto rounded-xl border border-white/10 bg-black/20">
+              <table className="w-full text-sm">
+                <thead className="bg-white/5 text-neutral-400 text-xs uppercase tracking-wide">
+                  <tr>
+                    <th className="px-4 py-3 text-left">Listing #</th>
+                    <th className="px-4 py-3 text-left">Tokens</th>
+                    <th className="px-4 py-3 text-left">Unit Price (₹)</th>
+                    <th className="px-4 py-3 text-left">Created</th>
+                    <th className="px-4 py-3 text-right">Actions</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-white/5">
+                  {userListings.map((listing) => (
+                    <tr key={listing.id} className="hover:bg-white/5 transition-colors">
+                      <td className="px-4 py-3 font-mono text-xs">#{listing.id}</td>
+                      <td className="px-4 py-3">{formatTokens(listing.remaining_tokens)}</td>
+                      <td className="px-4 py-3">₹ {listing.unit_price}</td>
+                      <td className="px-4 py-3 text-xs text-neutral-400">
+                        {listing.created_at ? new Date(listing.created_at * 1000).toLocaleString() : '—'}
+                      </td>
+                      <td className="px-4 py-3 text-right">
+                        <button
+                          className="btn-secondary text-xs"
+                          onClick={() => {
+                            setActiveListing(listing);
+                            setListingModalOpen(true);
+                          }}
+                        >
+                          Details
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )
+        ) : (
+          <div className="text-sm text-neutral-400">Connect your wallet to view marketplace listings.</div>
+        )}
+      </section>
+
+      <section className="mb-8 rounded-2xl border border-white/10 bg-white/5 p-5">
         <h2 className="text-lg font-semibold mb-4">Rejected</h2>
         <CardsGrid emptyText={walletAddr? 'No rejected requests' : 'Connect wallet to view'}>
           {rejected.map(r => (
@@ -593,6 +698,18 @@ export default function ProfilePage(){
           amount={sellAmount}
           setAmount={setSellAmount}
           balance={cctBalance}
+        />
+      )}
+
+      {listingModalOpen && activeListing && (
+        <ListingDetailsModal
+          listing={activeListing}
+          onClose={() => {
+            setListingModalOpen(false);
+            setActiveListing(null);
+          }}
+          onRemove={() => { void handleRemoveListing(activeListing); }}
+          removing={removingListingId === activeListing.id}
         />
       )}
       
@@ -1006,6 +1123,55 @@ function DetailsModal({ request, metadata, onClose }: { request: Request; metada
         
         <div className="mt-6 flex justify-end">
           <button onClick={onClose} className="btn-primary">Close</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ListingDetailsModal({ listing, onClose, onRemove, removing }:{ listing: Listing; onClose: () => void; onRemove: () => void; removing: boolean }) {
+  const created = listing.created_at ? new Date(listing.created_at * 1000).toLocaleString() : '—';
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+      <div className="absolute inset-0 bg-black/70" onClick={onClose} />
+      <div className="relative z-10 w-full max-w-md rounded-2xl border border-white/10 bg-[var(--surface-glass)] p-6">
+        <h3 className="text-xl font-semibold mb-4">Listing #{listing.id}</h3>
+
+        <div className="space-y-3 text-sm">
+          <div className="flex justify-between">
+            <span className="text-neutral-400">Tokens Remaining</span>
+            <span className="font-medium text-white">{formatTokens(listing.remaining_tokens)} CCT</span>
+          </div>
+          <div className="flex justify-between">
+            <span className="text-neutral-400">Unit Price</span>
+            <span className="font-medium text-white">₹ {listing.unit_price}</span>
+          </div>
+          <div className="flex justify-between">
+            <span className="text-neutral-400">Created On</span>
+            <span className="text-neutral-300">{created}</span>
+          </div>
+        </div>
+
+        <div className="mt-4 p-3 rounded-lg bg-blue-500/10 border border-blue-500/20 text-xs text-blue-200">
+          Removing this listing will return the escrowed tokens to your wallet. Gas fees apply.
+        </div>
+
+        <div className="mt-6 flex gap-3">
+          <button
+            className="flex-1 px-4 py-3 rounded-lg border border-white/10 bg-neutral-800 hover:bg-neutral-700 transition-colors"
+            onClick={onClose}
+            disabled={removing}
+          >
+            Close
+          </button>
+          <button
+            className="flex-1 px-4 py-3 rounded-lg bg-red-600 hover:bg-red-500 font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            onClick={onRemove}
+            disabled={removing}
+          >
+            {removing ? 'Removing...' : 'Remove Listing'}
+          </button>
         </div>
       </div>
     </div>
