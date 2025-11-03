@@ -16,6 +16,15 @@ const CorporateProfileSchema = new mongoose.Schema({
   verifiedAt: Date
 }, { _id:false });
 
+const BankDetailsSchema = new mongoose.Schema({
+  accountHolderName: { type: String },
+  accountNumberEnc: { type: String },
+  accountNumberLast4: { type: String },
+  ifscCode: { type: String },
+  bankName: { type: String },
+  updatedAt: { type: Date }
+}, { _id:false });
+
 const UserSchema = new mongoose.Schema({
   username: { type:String, unique:true, sparse:true },
   role: { type:String, enum:['INDIVIDUAL','CORPORATE','VALIDATOR','ADMIN'], default:'INDIVIDUAL' },
@@ -32,6 +41,9 @@ const UserSchema = new mongoose.Schema({
     }
   },
   corporateProfile: CorporateProfileSchema,
+  bankDetails: BankDetailsSchema,
+  rupeeBalancePaise: { type: Number, default: 0 },
+  rupeeBalanceUpdatedAt: Date,
   stats: {
     treesApproved: { type: Number, default: 0 },
     treesPending: { type: Number, default: 0 },

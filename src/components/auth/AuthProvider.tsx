@@ -7,6 +7,7 @@ type AuthRole = 'INDIVIDUAL' | 'CORPORATE' | 'VALIDATOR' | 'ADMIN';
 export interface AuthenticatedUser {
   id: string;
   username: string | null;
+  email: string | null;
   role: AuthRole;
 }
 
@@ -56,7 +57,7 @@ export function AuthProvider({ children }:{ children: React.ReactNode }){
     setLoading(true);
     try {
       const me = await fetchCurrentUser(incomingToken);
-      setUser({ id: me.user.id, username: me.user.username ?? null, role: me.user.role });
+  setUser({ id: me.user.id, username: me.user.username ?? null, email: me.user.email ?? null, role: me.user.role });
       setMethods(me.methods);
     } catch(err){
       console.warn('[auth] failed to load session profile', err);

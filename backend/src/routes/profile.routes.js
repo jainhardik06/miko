@@ -2,6 +2,7 @@ import { Router } from 'express';
 import User from '../models/user.model.js';
 import Tree from '../models/tree.model.js';
 import { requireAuth } from '../middleware/auth.js';
+import { presentBankDetails, rupeesFromPaise } from '../services/wallet.js';
 
 const router = Router();
 
@@ -27,6 +28,16 @@ router.get('/me', requireAuth, async (req, res) => {
       email: user.email,
       role: user.role,
       wallets: user.authMethods?.wallets || [],
+      wallet: {
+        rupeeBalancePaise: user.rupeeBalancePaise || 0,
+        rupeeBalanceInr: rupeesFromPaise(user.rupeeBalancePaise || 0),
+        updatedAt: user.rupeeBalanceUpdatedAt,
+        bankDetails: presentBankDetails(user.bankDetails),
+        aptosWallets: user.authMethods?.wallets || []
+      },
+      rupeeBalancePaise: user.rupeeBalancePaise || 0,
+      rupeeBalanceInr: rupeesFromPaise(user.rupeeBalancePaise || 0),
+      bankDetails: presentBankDetails(user.bankDetails),
       corporateProfile: user.corporateProfile,
       stats: {
         treesApproved: approvedTrees,

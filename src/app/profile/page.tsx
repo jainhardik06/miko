@@ -8,10 +8,38 @@ import ThemeToggle from '../../components/ThemeToggle';
 import { MODULE_ADDRESS, getConfig } from '../../config';
 import type { Tree, Request, Listing } from '../../lib/aptos';
 import { getCCTBalance, ratePpmToTokens, microToTokens, getPendingCCT, buildClaimPendingTx, fetchListings, tokensToMicro } from '../../lib/aptos';
+import { fetchWalletSummary, fetchWalletTransactions, updateBankDetails, createRazorpayWalletTopup, createCryptoWalletTopup } from '../../lib/walletClient';
 import { aptos as aptosClient } from '../../state/store';
 import React from 'react';
 
 const API = getConfig().apiOrigin;
+
+declare global {
+  interface Window {
+    Razorpay?: any;
+  }
+}
+
+const formatINR = (value: number): string => {
+  const rupees = Number.isFinite(value) ? value : 0;
+  return `₹ ${rupees.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+};
+
+const paiseToRupees = (paise: number): number => (Number.isFinite(paise) ? paise : 0) / 100;
+
+async function loadRazorpayCheckout(): Promise<any | null> {
+  if (typeof window === 'undefined') return null;
+  if (window.Razorpay) return window.Razorpay;
+  await new Promise<void>((resolve, reject) => {
+    const script = document.createElement('script');
+    script.src = 'https://checkout.razorpay.com/v1/checkout.js';
+    script.async = true;
+    script.onload = () => resolve();
+    script.onerror = () => reject(new Error('Failed to load Razorpay checkout'));
+    document.body.appendChild(script);
+  });
+  return window.Razorpay || null;
+}
 
 const formatTokens = (value: number): string => {
   if (!Number.isFinite(value)) return '0';
@@ -33,6 +61,50 @@ interface BackendTree {
   cctGranted: number;
   status: 'pending' | 'approved' | 'rejected';
   approvedAt?: string;
+}
+
+interface BankDetailsSummary {
+  accountHolderName?: string;
+  bankName?: string;
+  ifscCode?: string;
+  accountLast4?: string;
+  maskedAccount?: string;
+  updatedAt?: string;
+}
+
+interface WalletSummaryData {
+  balancePaise: number;
+  balanceInr: number;
+  updatedAt?: string;
+  bankDetails?: BankDetailsSummary | null;
+  wallets?: { address: string }[];
+}
+
+interface WalletTransactionRow {
+  id: string;
+  direction: 'CREDIT' | 'DEBIT';
+  amountPaise: number;
+  balanceAfterPaise: number;
+  referenceType?: string;
+  referenceId?: string;
+  description?: string;
+  createdAt: string;
+}
+
+interface BankDetailsForm {
+  accountHolderName: string;
+  accountNumber: string;
+  bankName: string;
+  ifscCode: string;
+}
+
+interface CryptoTopupInfo {
+  topupId: string;
+  amountPaise: number;
+  quoteInrPerApt: number;
+  aptRequired: number;
+  depositAddress: string;
+  expiresAt?: string;
 }
 
 export default function ProfilePage(){
@@ -66,11 +138,22 @@ export default function ProfilePage(){
   const [listingModalOpen, setListingModalOpen] = useState(false);
   const [activeListing, setActiveListing] = useState<Listing | null>(null);
   const [removingListingId, setRemovingListingId] = useState<number | null>(null);
+  const [walletSummary, setWalletSummary] = useState<WalletSummaryData | null>(null);
+  const [walletTransactions, setWalletTransactions] = useState<WalletTransactionRow[]>([]);
+  const [walletLoading, setWalletLoading] = useState(false);
+  const [walletStatus, setWalletStatus] = useState<string | null>(null);
+  const [topupAmount, setTopupAmount] = useState<number>(1000);
+  const [cryptoTopupAmount, setCryptoTopupAmount] = useState<number>(1000);
+  const [cryptoTopupInfo, setCryptoTopupInfo] = useState<CryptoTopupInfo | null>(null);
+  const [showBankModal, setShowBankModal] = useState(false);
+  const [bankSubmitting, setBankSubmitting] = useState(false);
   
   // Details modal state
   const [showDetailsModal, setShowDetailsModal] = useState(false);
   const [detailsRequest, setDetailsRequest] = useState<Request | null>(null);
   const [detailsMetadata, setDetailsMetadata] = useState<any>(null);
+  const isCorporate = user?.role === 'CORPORATE';
+  const isIndividual = user?.role === 'INDIVIDUAL';
 
   useEffect(()=>{ setUsername(user?.username || ''); }, [user?.username]);
 
@@ -101,6 +184,13 @@ export default function ProfilePage(){
       if (profileRes.ok) {
         const profileData = await profileRes.json();
         setStats(profileData.stats || { treesApproved: 0, treesPending: 0, treesRejected: 0, totalCCT: 0 });
+        setWalletSummary((prev) => ({
+          balancePaise: profileData.wallet?.rupeeBalancePaise ?? profileData.rupeeBalancePaise ?? prev?.balancePaise ?? 0,
+          balanceInr: profileData.wallet?.rupeeBalanceInr ?? profileData.rupeeBalanceInr ?? paiseToRupees(profileData.wallet?.rupeeBalancePaise ?? profileData.rupeeBalancePaise ?? prev?.balancePaise ?? 0),
+          updatedAt: profileData.wallet?.updatedAt ?? profileData.rupeeBalanceUpdatedAt ?? prev?.updatedAt,
+          bankDetails: profileData.wallet?.bankDetails ?? profileData.bankDetails ?? prev?.bankDetails ?? null,
+          wallets: profileData.wallet?.aptosWallets ?? profileData.wallets ?? prev?.wallets ?? []
+        }));
       }
 
       // Load approved trees from backend (only approved ones are in DB)
@@ -115,6 +205,31 @@ export default function ProfilePage(){
       }
     } catch (err) {
       console.error('[Profile] Backend API error:', err);
+    }
+  }, [token]);
+
+  const refreshWalletSummary = useCallback(async () => {
+    if (!token) return;
+    try {
+      setWalletLoading(true);
+      setWalletStatus(null);
+      const [summaryData, txData] = await Promise.all([
+        fetchWalletSummary(token),
+        fetchWalletTransactions(token, 20)
+      ]);
+      setWalletSummary({
+        balancePaise: summaryData?.balancePaise ?? 0,
+        balanceInr: summaryData?.balanceInr ?? paiseToRupees(summaryData?.balancePaise ?? 0),
+        updatedAt: summaryData?.updatedAt,
+        bankDetails: summaryData?.bankDetails ?? null,
+        wallets: summaryData?.wallets ?? []
+      });
+      setWalletTransactions(txData?.transactions || []);
+    } catch (error: any) {
+      console.error('[Profile] Wallet summary load failed:', error);
+      setWalletStatus(error?.message || 'Failed to load wallet summary');
+    } finally {
+      setWalletLoading(false);
     }
   }, [token]);
 
@@ -139,6 +254,80 @@ export default function ProfilePage(){
       setListedCct(0);
     }
   }, [walletAddr]);
+
+  const handleTopupRazorpay = useCallback(async () => {
+    if (!token) return;
+    if (!Number.isFinite(topupAmount) || topupAmount <= 0) {
+      setWalletStatus('Enter a valid top-up amount.');
+      return;
+    }
+    try {
+      setWalletLoading(true);
+      const order = await createRazorpayWalletTopup(token, topupAmount);
+      const RazorpayCtor = await loadRazorpayCheckout();
+      if (!RazorpayCtor) {
+        throw new Error('Unable to load Razorpay checkout.');
+      }
+      const checkout = new RazorpayCtor({
+        key: order.key,
+        amount: order.amountPaise,
+        currency: order.currency,
+        name: 'Miko Wallet Top-up',
+        description: 'Add funds to your custodial balance',
+        order_id: order.orderId,
+        handler: () => {
+          setWalletStatus('Payment initiated. Balance will update after confirmation.');
+          void refreshWalletSummary();
+        },
+        prefill: {
+          email: user?.email || undefined,
+          name: user?.username || undefined
+        },
+        theme: { color: '#22c55e' }
+      });
+      checkout.open();
+    } catch (error: any) {
+      console.error('[Profile] Razorpay top-up error:', error);
+      setWalletStatus(error?.message || 'Failed to start Razorpay checkout');
+    } finally {
+      setWalletLoading(false);
+    }
+  }, [token, topupAmount, refreshWalletSummary, user?.email, user?.username]);
+
+  const handleCryptoTopup = useCallback(async () => {
+    if (!token) return;
+    if (!Number.isFinite(cryptoTopupAmount) || cryptoTopupAmount <= 0) {
+      setWalletStatus('Enter a valid top-up amount.');
+      return;
+    }
+    try {
+      setWalletLoading(true);
+      const intent = await createCryptoWalletTopup(token, cryptoTopupAmount);
+      setCryptoTopupInfo(intent);
+      setWalletStatus(`Send ${intent.aptRequired} APT to ${intent.depositAddress} before ${intent.expiresAt ? new Date(intent.expiresAt).toLocaleString() : 'expiry'} to complete the top-up.`);
+    } catch (error: any) {
+      console.error('[Profile] Crypto top-up intent failed:', error);
+      setWalletStatus(error?.message || 'Failed to create crypto top-up intent');
+    } finally {
+      setWalletLoading(false);
+    }
+  }, [token, cryptoTopupAmount]);
+
+  const handleBankSubmit = useCallback(async (form: BankDetailsForm) => {
+    if (!token) return;
+    try {
+      setBankSubmitting(true);
+      await updateBankDetails(token, form);
+      setWalletStatus('Bank details updated successfully.');
+      setShowBankModal(false);
+      await refreshWalletSummary();
+    } catch (error: any) {
+      console.error('[Profile] Bank update failed:', error);
+      setWalletStatus(error?.message || 'Failed to update bank details');
+    } finally {
+      setBankSubmitting(false);
+    }
+  }, [token, refreshWalletSummary]);
 
   const loadFromBlockchain = useCallback(async (addr?: string, fresh = false)=>{
     setLoadingOnchain(true);
@@ -186,6 +375,12 @@ export default function ProfilePage(){
       loadStatsFromBackend();
     }
   }, [token, loadFromBlockchain, loadStatsFromBackend]);
+
+  useEffect(() => {
+    if (token) {
+      void refreshWalletSummary();
+    }
+  }, [token, refreshWalletSummary]);
 
   useEffect(() => { void refreshListedTokens(); }, [walletAddr, refreshListedTokens]);
 
@@ -419,6 +614,166 @@ export default function ProfilePage(){
           {modulesError} — stats may be empty. If you just deployed, click Refresh.
         </div>
       ) : null}
+
+      <section className="mb-8 rounded-2xl border border-white/10 bg-white/5 p-5">
+        <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+          <div>
+            <h2 className="text-lg font-semibold">Profile &amp; Payouts</h2>
+            <p className="text-sm text-neutral-400">
+              {isCorporate
+                ? 'Fund your custodial rupee balance to buy carbon credits with fiat rails.'
+                : 'Track fiat sales, manage payouts, and keep your bank details current.'}
+            </p>
+          </div>
+          <div className="text-right">
+            <div className="text-xs uppercase tracking-wide text-neutral-500">Internal Rupee Balance</div>
+            <div className="text-2xl font-semibold">{formatINR(paiseToRupees(walletSummary?.balancePaise || 0))}</div>
+            {walletSummary?.updatedAt ? (
+              <div className="text-xs text-neutral-500">Updated {new Date(walletSummary.updatedAt).toLocaleString()}</div>
+            ) : null}
+          </div>
+        </div>
+        {walletStatus ? (
+          <div className="mt-3 rounded-lg border border-blue-500/30 bg-blue-500/10 px-3 py-2 text-sm text-blue-200">
+            {walletStatus}
+          </div>
+        ) : null}
+        <div className="mt-5 grid gap-4 md:grid-cols-2">
+          <div className="rounded-xl border border-white/10 bg-neutral-900/60 p-4">
+            <div className="flex items-center justify-between">
+              <h3 className="text-sm font-semibold text-neutral-100">Funding</h3>
+              {walletLoading ? <span className="text-xs text-neutral-500">Working…</span> : null}
+            </div>
+            {isCorporate ? (
+              <>
+                <div className="mt-3">
+                  <label className="text-xs uppercase tracking-wide text-neutral-500">Add funds (Razorpay)</label>
+                  <div className="mt-1 flex gap-2">
+                    <input
+                      type="number"
+                      min={50}
+                      value={topupAmount}
+                      onChange={(e) => setTopupAmount(Number(e.target.value))}
+                      className="flex-1 rounded-md border border-white/10 bg-neutral-800 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-emerald-500/30"
+                    />
+                    <button className="btn-primary text-sm" onClick={() => void handleTopupRazorpay()} disabled={walletLoading}>
+                      Pay with Razorpay
+                    </button>
+                  </div>
+                  <p className="mt-1 text-xs text-neutral-500">UPI, cards, and bank transfers (Razorpay Test Mode).</p>
+                </div>
+                <div className="mt-4">
+                  <label className="text-xs uppercase tracking-wide text-neutral-500">Add funds (Send APT)</label>
+                  <div className="mt-1 flex gap-2">
+                    <input
+                      type="number"
+                      min={50}
+                      value={cryptoTopupAmount}
+                      onChange={(e) => setCryptoTopupAmount(Number(e.target.value))}
+                      className="flex-1 rounded-md border border-white/10 bg-neutral-800 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-emerald-500/30"
+                    />
+                    <button className="btn-secondary text-sm" onClick={() => void handleCryptoTopup()} disabled={walletLoading}>
+                      Generate Deposit
+                    </button>
+                  </div>
+                  {cryptoTopupInfo ? (
+                    <div className="mt-2 rounded-lg border border-emerald-500/30 bg-emerald-500/10 p-3 text-xs text-emerald-100">
+                      <div>Send <strong>{cryptoTopupInfo.aptRequired}</strong> APT to:</div>
+                      <code className="mt-1 block break-all text-emerald-200">{cryptoTopupInfo.depositAddress}</code>
+                      <div className="mt-1 text-[11px] text-emerald-200/80">
+                        Top-up ID: {cryptoTopupInfo.topupId} • Amount: {formatINR(paiseToRupees(cryptoTopupInfo.amountPaise))}
+                      </div>
+                    </div>
+                  ) : null}
+                </div>
+              </>
+            ) : (
+              <div className="mt-3 rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-sm text-amber-100">
+                Withdrawals arrive in your bank account once sales are settled. Keep your bank details updated to avoid delays.
+              </div>
+            )}
+          </div>
+          <div className="rounded-xl border border-white/10 bg-neutral-900/60 p-4">
+            <h3 className="text-sm font-semibold text-neutral-100">Account Details</h3>
+            <div className="mt-3 space-y-3 text-sm">
+              <div>
+                <div className="text-xs uppercase text-neutral-500">Aptos Wallet</div>
+                <div className="font-mono text-xs text-neutral-200 break-all">
+                  {walletSummary?.wallets?.[0]?.address || methods?.wallets?.[0]?.address || 'Not linked'}
+                </div>
+              </div>
+              <div>
+                <div className="flex items-center justify-between text-xs uppercase text-neutral-500">
+                  <span>Bank Details</span>
+                  {isIndividual ? (
+                    <button className="text-emerald-400 hover:text-emerald-300 text-xs" onClick={() => setShowBankModal(true)}>
+                      {walletSummary?.bankDetails ? 'Update' : 'Add'}
+                    </button>
+                  ) : null}
+                </div>
+                {walletSummary?.bankDetails ? (
+                  <div className="mt-1 text-neutral-300 text-sm">
+                    <div>{walletSummary.bankDetails.accountHolderName}</div>
+                    <div>
+                      {walletSummary.bankDetails.bankName}
+                      {' • '}
+                      {walletSummary.bankDetails.maskedAccount || (walletSummary.bankDetails.accountLast4 ? `**** **${walletSummary.bankDetails.accountLast4}` : '—')}
+                    </div>
+                    <div>IFSC: {walletSummary.bankDetails.ifscCode}</div>
+                  </div>
+                ) : (
+                  <div className="mt-1 text-xs text-neutral-500">
+                    {isIndividual ? 'Add bank details to enable fiat payouts.' : 'Payouts are disabled for company accounts.'}
+                  </div>
+                )}
+              </div>
+            </div>
+            {isIndividual ? (
+              <button
+                className="mt-4 w-full rounded-md bg-emerald-600 px-4 py-2 text-sm font-medium text-black opacity-60 cursor-not-allowed"
+                disabled
+              >
+                Withdraw to Bank (coming soon)
+              </button>
+            ) : null}
+          </div>
+        </div>
+        <div className="mt-6">
+          <h3 className="mb-2 text-sm font-semibold text-neutral-100">Recent Transactions</h3>
+          {walletTransactions.length === 0 ? (
+            <div className="text-xs text-neutral-500">No wallet activity yet.</div>
+          ) : (
+            <div className="overflow-x-auto rounded-xl border border-white/10 bg-black/30">
+              <table className="w-full text-sm">
+                <thead className="bg-white/5 text-neutral-400 text-xs uppercase">
+                  <tr>
+                    <th className="px-4 py-2 text-left">When</th>
+                    <th className="px-4 py-2 text-left">Description</th>
+                    <th className="px-4 py-2 text-right">Amount</th>
+                    <th className="px-4 py-2 text-right">Balance</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-white/5">
+                  {walletTransactions.slice(0, 6).map((tx) => {
+                    const amountR = paiseToRupees(tx.amountPaise);
+                    const balanceR = paiseToRupees(tx.balanceAfterPaise);
+                    return (
+                      <tr key={tx.id} className="hover:bg-white/5 text-xs">
+                        <td className="px-4 py-2">{new Date(tx.createdAt).toLocaleString()}</td>
+                        <td className="px-4 py-2 text-neutral-300">{tx.description || tx.referenceType || '—'}</td>
+                        <td className={`px-4 py-2 text-right ${tx.direction === 'CREDIT' ? 'text-emerald-400' : 'text-red-400'}`}>
+                          {tx.direction === 'CREDIT' ? '+' : '-'}{formatINR(amountR)}
+                        </td>
+                        <td className="px-4 py-2 text-right text-neutral-200">{formatINR(balanceR)}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      </section>
 
       {/* Dashboard section */}
       <section className="mb-8 rounded-2xl border border-white/10 bg-white/5 p-5">
@@ -710,6 +1065,20 @@ export default function ProfilePage(){
           }}
           onRemove={() => { void handleRemoveListing(activeListing); }}
           removing={removingListingId === activeListing.id}
+        />
+      )}
+
+      {showBankModal && (
+        <BankDetailsModal
+          initial={{
+            accountHolderName: walletSummary?.bankDetails?.accountHolderName || '',
+            bankName: walletSummary?.bankDetails?.bankName || '',
+            ifscCode: walletSummary?.bankDetails?.ifscCode || '',
+            accountNumber: ''
+          }}
+          onClose={() => setShowBankModal(false)}
+          onSubmit={handleBankSubmit}
+          submitting={bankSubmitting}
         />
       )}
       
@@ -1174,6 +1543,90 @@ function ListingDetailsModal({ listing, onClose, onRemove, removing }:{ listing:
           </button>
         </div>
       </div>
+    </div>
+  );
+}
+
+function BankDetailsModal({ initial, onClose, onSubmit, submitting }:{ initial: BankDetailsForm; onClose: () => void; onSubmit: (form: BankDetailsForm) => Promise<void>; submitting: boolean }) {
+  const [form, setForm] = React.useState<BankDetailsForm>(initial);
+  const [error, setError] = React.useState<string | null>(null);
+
+  const handleChange = (field: keyof BankDetailsForm) => (event: React.ChangeEvent<HTMLInputElement>) => {
+    setForm((prev) => ({ ...prev, [field]: event.target.value }));
+  };
+
+  const handleSubmit = async (event: React.FormEvent) => {
+    event.preventDefault();
+    setError(null);
+    if (!form.accountHolderName || !form.accountNumber || !form.bankName || !form.ifscCode) {
+      setError('All fields are required.');
+      return;
+    }
+    try {
+      await onSubmit(form);
+    } catch (err: any) {
+      setError(err?.message || 'Failed to save bank details');
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+      <div className="absolute inset-0 bg-black/70" onClick={onClose} />
+      <form onSubmit={handleSubmit} className="relative z-10 w-full max-w-md rounded-2xl border border-white/10 bg-[var(--surface-glass)] p-6">
+        <h3 className="text-xl font-semibold mb-4">Bank details</h3>
+        <p className="text-xs text-neutral-400 mb-4">
+          Account numbers are encrypted before storage. Re-enter your full account number whenever you update these details.
+        </p>
+        <div className="space-y-3">
+          <label className="block text-sm">
+            <span className="text-neutral-400 text-xs uppercase tracking-wide">Account holder name</span>
+            <input
+              className="mt-1 w-full rounded-md border border-white/10 bg-neutral-900 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-emerald-500/30"
+              value={form.accountHolderName}
+              onChange={handleChange('accountHolderName')}
+              required
+            />
+          </label>
+          <label className="block text-sm">
+            <span className="text-neutral-400 text-xs uppercase tracking-wide">Account number</span>
+            <input
+              className="mt-1 w-full rounded-md border border-white/10 bg-neutral-900 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-emerald-500/30"
+              value={form.accountNumber}
+              onChange={handleChange('accountNumber')}
+              inputMode="numeric"
+              autoComplete="off"
+              required
+            />
+          </label>
+          <label className="block text-sm">
+            <span className="text-neutral-400 text-xs uppercase tracking-wide">Bank name</span>
+            <input
+              className="mt-1 w-full rounded-md border border-white/10 bg-neutral-900 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-emerald-500/30"
+              value={form.bankName}
+              onChange={handleChange('bankName')}
+              required
+            />
+          </label>
+          <label className="block text-sm">
+            <span className="text-neutral-400 text-xs uppercase tracking-wide">IFSC</span>
+            <input
+              className="mt-1 w-full uppercase rounded-md border border-white/10 bg-neutral-900 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-emerald-500/30"
+              value={form.ifscCode}
+              onChange={handleChange('ifscCode')}
+              required
+            />
+          </label>
+        </div>
+        {error ? <div className="mt-3 rounded-md border border-red-500/40 bg-red-500/10 px-3 py-2 text-xs text-red-200">{error}</div> : null}
+        <div className="mt-6 flex gap-3">
+          <button type="button" className="flex-1 px-4 py-3 rounded-lg border border-white/10 bg-neutral-800 hover:bg-neutral-700 transition-colors" onClick={onClose} disabled={submitting}>
+            Cancel
+          </button>
+          <button type="submit" className="flex-1 px-4 py-3 rounded-lg bg-emerald-500 hover:bg-emerald-400 font-medium text-black transition-colors disabled:opacity-50 disabled:cursor-not-allowed" disabled={submitting}>
+            {submitting ? 'Saving…' : 'Save details'}
+          </button>
+        </div>
+      </form>
     </div>
   );
 }

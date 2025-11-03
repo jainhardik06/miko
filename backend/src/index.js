@@ -15,6 +15,8 @@ import ipfsRoutes from './routes/ipfs.routes.js';
 import adminRoutes from './routes/admin.routes.js';
 import marketplaceRoutes from './routes/marketplace.routes.js';
 import blockchainRoutes from './routes/blockchain.routes.js';
+import walletRoutes from './routes/wallet.routes.js';
+import paymentsRoutes from './routes/payments.routes.js';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
@@ -35,7 +37,15 @@ app.use(cors({
   credentials: true
 }));
 // Allow larger JSON bodies for image data URLs (kept modest to avoid abuse)
-app.use(express.json({ limit: '10mb' }));
+app.use(express.json({
+  limit: '10mb',
+  verify: (req, _res, buf) => {
+    if (req.originalUrl === '/api/payments/webhooks/razorpay') {
+      req.rawBody = Buffer.from(buf);
+    }
+  }
+}));
+app.use(express.urlencoded({ extended: true }));
 app.use(cookieParser());
 app.use(passport.initialize());
 
@@ -50,6 +60,8 @@ app.use('/api/ipfs', ipfsRoutes);
 app.use('/api/admin', adminRoutes);
 app.use('/api/marketplace', marketplaceRoutes);
 app.use('/api/blockchain', blockchainRoutes);
+app.use('/api/wallet', walletRoutes);
+app.use('/api/payments', paymentsRoutes);
 
 // Static hosting for uploaded assets under /uploads
 const __filename = fileURLToPath(import.meta.url);
