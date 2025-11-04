@@ -18,6 +18,11 @@ const authedIndividualButtons: SimpleLink[] = [
   { label: "About", href: "/about" },
   { label: "Mint", href: "/mint", cta: true }
 ];
+const authedCorporateButtons: SimpleLink[] = [
+  { label: "Marketplace", href: "/marketplace" },
+  { label: "Buy Tokens", href: "/profile#company-marketplace", cta: true },
+  { label: "Docs", href: "/how-it-works" }
+];
 // Legacy informational links kept for mobile expansion
 const secondaryLinks: SimpleLink[] = [
   { label: "Transparency", href: "/transparency" },
@@ -27,7 +32,8 @@ const secondaryLinks: SimpleLink[] = [
 
 function SegButton({ link }: { link: SimpleLink }) {
   const pathname = usePathname();
-  const active = pathname === link.href;
+  const targetPath = link.href.split("#")[0];
+  const active = pathname === targetPath;
   return (
     <Link
       href={link.href}
@@ -40,6 +46,13 @@ export function Navbar() {
   const account = useMikoStore(s=>s.account);
   const [open, setOpen] = useState(false);
   const { user, methods, logout, loading } = useAuth();
+  const navButtons = user
+    ? user.role === 'INDIVIDUAL'
+      ? authedIndividualButtons
+      : user.role === 'CORPORATE'
+        ? authedCorporateButtons
+        : publicButtons
+    : publicButtons;
 
   return (
     <header className="fixed top-0 inset-x-0 z-50">
@@ -54,7 +67,7 @@ export function Navbar() {
           {/* Center Buttons */}
           <div className="hidden md:flex flex-1 justify-center">
             <div className="nav-btn-group">
-              {(user && user.role === 'INDIVIDUAL' ? authedIndividualButtons : publicButtons).map(btn => <SegButton key={btn.href} link={btn} />)}
+              {navButtons.map(btn => <SegButton key={btn.href} link={btn} />)}
               {!user ? (
                 <Link href="/auth/login" className="nav-btn cta">Login / Signup</Link>
               ) : null}
@@ -73,7 +86,7 @@ export function Navbar() {
         {open && (
           <div className="md:hidden mt-2 nav-shell flex flex-col gap-2">
             <div className="flex flex-col gap-1">
-              {(user && user.role === 'INDIVIDUAL' ? authedIndividualButtons : publicButtons).map(btn => (
+              {navButtons.map(btn => (
                 <Link key={btn.href} href={btn.href} onClick={()=>setOpen(false)} className={`nav-btn ${btn.cta? 'cta':''}`}>{btn.label}</Link>
               ))}
               {user ? (

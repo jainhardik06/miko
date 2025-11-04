@@ -1,6 +1,6 @@
 "use client";
 import { useEffect, useState } from 'react';
-import { getTree, pendingAmount, Tree } from '@/lib/aptos';
+import { getTree, microToTokens, ratePpmToTokens, Tree } from '@/lib/aptos';
 
 interface Props { params: { id: string }; }
 
@@ -17,7 +17,15 @@ export default function AssetDetailPage({ params }: Props) {
         const t = await getTree(treeId);
         if (!mounted) return;
         setMeta(t);
-        if (t) setPending(await pendingAmount(treeId));
+        if (t) {
+          const totalGranted = Number.isFinite(t.granted_cct)
+            ? Number(t.granted_cct)
+            : ratePpmToTokens(t.rate_ppm);
+          const alreadyClaimed = microToTokens(t.cumulative_claimed);
+          setPending(Math.max(0, totalGranted - alreadyClaimed));
+        } else {
+          setPending(0);
+        }
       } finally { if (mounted) setLoading(false); }
     })();
     return () => { mounted = false; };

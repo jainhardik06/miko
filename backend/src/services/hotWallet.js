@@ -22,8 +22,21 @@ export function getHotWalletAccount() {
   if (!secret) {
     throw new Error('FIAT_HOT_WALLET_PRIVATE_KEY (or ADMIN_PRIVATE_KEY) not configured');
   }
-  const keyHex = secret.startsWith('0x') ? secret.slice(2) : secret;
-  hotWallet = new AptosAccount(new HexString(keyHex).toUint8Array());
+  try {
+    const trimmed = secret.trim();
+    const match = trimmed.match(/0x[0-9a-fA-F]+/);
+    const hexPortion = match ? match[0] : trimmed;
+    const rawHex = hexPortion.startsWith('0x') ? hexPortion.slice(2) : hexPortion;
+    if (!/^[0-9a-fA-F]+$/.test(rawHex)) {
+      throw new Error('hex string expected');
+    }
+    const evenHex = rawHex.length % 2 === 1 ? `0${rawHex}` : rawHex;
+    const normalized = `0x${evenHex}`;
+    const keyBytes = HexString.ensure(normalized).toUint8Array();
+    hotWallet = new AptosAccount(keyBytes);
+  } catch (error) {
+    throw new Error(`Invalid FIAT_HOT_WALLET_PRIVATE_KEY format: ${error?.message || error}`);
+  }
   return hotWallet;
 }
 

@@ -1,10 +1,40 @@
 "use client";
 import dynamic from 'next/dynamic';
 const HeroScene = dynamic(()=>import('@/components/HeroScene'), { ssr:false, loading: ()=> <div className="h-[60vh] flex items-center justify-center text-xs text-neutral-500">Loading scene…</div> });
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { fetchListings, buyCCT, fetchListing, Listing, TxResult, MICRO_UNITS } from '@/lib/aptos';
 import { useToast } from '@/components/ToastProvider';
 import { useMikoStore } from '@/state/store';
+import { useAuth } from '@/components/auth/AuthProvider';
+import { fetchWalletSummary, buyWithMikoWallet, createPurchaseOrder } from '@/lib/walletClient';
+
+const formatINR = (value: number): string => {
+  const rupees = Number.isFinite(value) ? value : 0;
+  return `₹ ${rupees.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+};
+
+const paiseToRupees = (paise: number): number => (Number.isFinite(paise) ? paise : 0) / 100;
+
+async function loadRazorpayCheckout(): Promise<any | null> {
+  if (typeof window === 'undefined') return null;
+  if ((window as any).Razorpay) return (window as any).Razorpay;
+  await new Promise<void>((resolve, reject) => {
+    const script = document.createElement('script');
+    script.src = 'https://checkout.razorpay.com/v1/checkout.js';
+    script.async = true;
+    script.onload = () => resolve();
+    script.onerror = () => reject(new Error('Failed to load Razorpay checkout'));
+    document.body.appendChild(script);
+  });
+  return (window as any).Razorpay || null;
+}
+
+interface WalletSummaryData {
+  balancePaise: number;
+  balanceInr: number;
+  updatedAt?: string;
+  wallets?: { address: string }[];
+}
 
 export default function MarketplacePage() {
   const account = useMikoStore(s => s.account);
@@ -17,6 +47,17 @@ export default function MarketplacePage() {
   const [quantities, setQuantities] = useState<Record<number,string>>({});
   const [errors, setErrors] = useState<Record<string,string>>({});
   const [viewMode, setViewMode] = useState<'list'|'grid'>('list');
+  const { user, methods, token } = useAuth();
+  const [walletSummary, setWalletSummary] = useState<WalletSummaryData | null>(null);
+  const [walletLoading, setWalletLoading] = useState(false);
+  const [walletStatus, setWalletStatus] = useState<string | null>(null);
+  const [purchaseListing, setPurchaseListing] = useState<Listing | null>(null);
+  const [purchaseBusy, setPurchaseBusy] = useState<'wallet' | 'razorpay' | null>(null);
+  const [purchaseError, setPurchaseError] = useState<string | null>(null);
+  const [purchaseStatus, setPurchaseStatus] = useState<string | null>(null);
+  const [purchaseQuantity, setPurchaseQuantity] = useState<string>('1');
+  const isCorporate = user?.role === 'CORPORATE';
+  const linkedAptosWallet = walletSummary?.wallets?.[0]?.address || methods?.wallets?.[0]?.address || account || null;
 
   // UI model: enrich listings with profile-like details for display
   type UIListing = Listing & { username: string; location: string; demo?: boolean };
@@ -62,13 +103,50 @@ export default function MarketplacePage() {
     return n;
   }
 
-  async function load() {
+  const load = useCallback(async () => {
     setLoading(true);
-    try { setListings(await fetchListings()); }
-    finally { setLoading(false); }
-  }
+    try {
+      setListings(await fetchListings());
+    } finally {
+      setLoading(false);
+    }
+  }, []);
 
-  useEffect(() => { load(); const i = setInterval(load, 10000); return () => clearInterval(i); }, []);
+  useEffect(() => {
+    void load();
+    const i = setInterval(() => { void load(); }, 10000);
+    return () => clearInterval(i);
+  }, [load]);
+
+  const refreshWalletSummary = useCallback(async () => {
+    if (!token) return;
+    try {
+      setWalletLoading(true);
+      setWalletStatus(null);
+      const summary = await fetchWalletSummary(token);
+      setWalletSummary({
+        balancePaise: summary?.balancePaise ?? 0,
+        balanceInr: summary?.balanceInr ?? paiseToRupees(summary?.balancePaise ?? 0),
+        updatedAt: summary?.updatedAt,
+        wallets: summary?.wallets ?? []
+      });
+    } catch (error: any) {
+      console.error('[Marketplace] Wallet summary load failed:', error);
+      setWalletStatus(error?.message || 'Failed to load wallet summary');
+      setWalletSummary(null);
+    } finally {
+      setWalletLoading(false);
+    }
+  }, [token]);
+
+  useEffect(() => {
+    if (!isCorporate || !token) {
+      setWalletSummary(null);
+      setWalletStatus(null);
+      return;
+    }
+    void refreshWalletSummary();
+  }, [isCorporate, token, refreshWalletSummary]);
 
   async function buy(listingId: number, qty: number) {
     if (!account) return;
@@ -87,6 +165,135 @@ export default function MarketplacePage() {
   setTxStatus(`Buy complete for #${listingId}`); push({ message: 'Buy complete', type:'success'});
     } finally { setBuyingId(null); }
   }
+
+  const handleCorporateWalletPurchase = useCallback(async (listing: Listing, quantity: number) => {
+    if (!token) {
+      setPurchaseError('Session expired. Please log in again.');
+      return;
+    }
+    if (!linkedAptosWallet) {
+      setPurchaseError('Link an Aptos wallet before purchasing tokens.');
+      return;
+    }
+    if (!Number.isInteger(quantity) || quantity <= 0) {
+      setPurchaseError('Enter a whole number of tokens to purchase.');
+      return;
+    }
+    if (quantity > Math.round(listing.remaining_tokens)) {
+      setPurchaseError('Quantity exceeds available tokens in this listing.');
+      return;
+    }
+    const totalPaise = Math.round(quantity * listing.unit_price * 100);
+    const balancePaise = walletSummary?.balancePaise ?? 0;
+    if (balancePaise < totalPaise) {
+      setPurchaseError('Insufficient Miko wallet balance for this purchase.');
+      return;
+    }
+    try {
+      setPurchaseBusy('wallet');
+      setPurchaseError(null);
+      await buyWithMikoWallet(token, { listingId: listing.id, quantityTokens: quantity });
+      setPurchaseStatus(`Wallet purchase submitted for listing #${listing.id}. Tokens will transfer after settlement.`);
+      setPurchaseListing(null);
+      push({ message: 'Wallet payment initiated', type: 'success' });
+      await refreshWalletSummary();
+      await load();
+    } catch (error: any) {
+      console.error('[Marketplace] Wallet purchase failed:', error);
+      setPurchaseError(error?.message || 'Failed to complete wallet purchase');
+    } finally {
+      setPurchaseBusy(null);
+    }
+  }, [token, linkedAptosWallet, walletSummary?.balancePaise, refreshWalletSummary, load, push]);
+
+  const handleCorporateRazorpayPurchase = useCallback(async (listing: Listing, quantity: number) => {
+    if (!token) {
+      setPurchaseError('Session expired. Please log in again.');
+      return;
+    }
+    if (!linkedAptosWallet) {
+      setPurchaseError('Link an Aptos wallet before purchasing tokens.');
+      return;
+    }
+    if (!Number.isInteger(quantity) || quantity <= 0) {
+      setPurchaseError('Enter a whole number of tokens to purchase.');
+      return;
+    }
+    if (quantity > Math.round(listing.remaining_tokens)) {
+      setPurchaseError('Quantity exceeds available tokens in this listing.');
+      return;
+    }
+    try {
+      setPurchaseBusy('razorpay');
+      setPurchaseError(null);
+      const order = await createPurchaseOrder(token, { listingId: listing.id, quantityTokens: quantity });
+      const RazorpayCtor = await loadRazorpayCheckout();
+      if (!RazorpayCtor) {
+        throw new Error('Unable to initialize Razorpay checkout.');
+      }
+      const checkout = new RazorpayCtor({
+        key: order.key,
+        amount: order.amountPaise,
+        currency: order.currency,
+        name: 'Miko Marketplace Purchase',
+        description: `Listing #${listing.id}`,
+        order_id: order.orderId,
+        handler: () => {
+          setPurchaseStatus('Payment captured. Token transfer is being processed.');
+          push({ message: 'Razorpay payment captured', type: 'success' });
+          void refreshWalletSummary();
+          void load();
+        },
+        prefill: {
+          email: user?.email || undefined,
+          name: user?.username || undefined
+        },
+        notes: {
+          listingId: String(listing.id),
+          purchaseId: order.purchaseId
+        }
+      });
+      checkout.open();
+      setPurchaseStatus('Complete the Razorpay payment window to finish the purchase.');
+      setPurchaseListing(null);
+    } catch (error: any) {
+      console.error('[Marketplace] Razorpay purchase failed:', error);
+      setPurchaseError(error?.message || 'Failed to start Razorpay checkout');
+    } finally {
+      setPurchaseBusy(null);
+    }
+  }, [token, linkedAptosWallet, refreshWalletSummary, load, user?.email, user?.username, push]);
+
+  const beginCorporatePurchase = useCallback((listing: Listing) => {
+    setPurchaseListing(listing);
+    setPurchaseQuantity('1');
+    setPurchaseError(null);
+    setPurchaseStatus(null);
+    setPurchaseBusy(null);
+    if (!walletSummary && !walletLoading) {
+      void refreshWalletSummary();
+    }
+  }, [walletSummary, walletLoading, refreshWalletSummary]);
+
+  const closePurchaseModal = useCallback(() => {
+    setPurchaseListing(null);
+    setPurchaseQuantity('1');
+    setPurchaseError(null);
+    setPurchaseStatus(null);
+    setPurchaseBusy(null);
+  }, []);
+
+  const selectedQuantity = useMemo(() => {
+    if (!purchaseListing) return 0;
+    if (!purchaseQuantity.trim()) return 0;
+    const parsed = parseInt(purchaseQuantity, 10);
+    return Number.isNaN(parsed) ? 0 : parsed;
+  }, [purchaseListing, purchaseQuantity]);
+
+  const purchaseLimit = purchaseListing ? Math.round(purchaseListing.remaining_tokens) : 0;
+  const quantityValid = purchaseListing ? Number.isInteger(selectedQuantity) && selectedQuantity > 0 && selectedQuantity <= purchaseLimit : false;
+  const totalCostRupees = purchaseListing ? selectedQuantity * purchaseListing.unit_price : 0;
+  const walletBalanceRupees = walletSummary ? paiseToRupees(walletSummary.balancePaise) : 0;
 
   return (
     <main className="min-h-screen w-full pt-6 md:pt-10">
@@ -156,23 +363,32 @@ export default function MarketplacePage() {
                       <td className="px-3 py-2 text-xs text-neutral-300">{l.location}</td>
                       <td className="px-3 py-2">{l.remaining_tokens.toLocaleString(undefined, { maximumFractionDigits: 0 })}</td>
                       <td className="px-3 py-2">₹ {l.unit_price}</td>
-                      <td className="px-3 py-2 space-x-2">
-                        {!l.demo && account && account!==l.seller && (
-                          <>
-                            <input
-                              value={quantities[l.id]||''}
-                              onChange={e=>{ const v = e.target.value; if(!/^[0-9]*$/.test(v)) return; setQuantities(q=>({...q,[l.id]:v})); }}
-                              placeholder="Qty"
-                              className="w-16 bg-neutral-900 border border-neutral-700 rounded px-1 py-1 text-xs focus:outline-none"
-                            />
+                      <td className="px-3 py-2">
+                        {!l.demo ? (
+                          isCorporate ? (
                             <button
-                              onClick={()=>{ const raw = parsePositiveInt(quantities[l.id]||'0','qty'+l.id, Math.round(l.remaining_tokens)); if(raw==null) return; buy(l.id, raw); }}
-                              disabled={buyingId===l.id||l.remaining_tokens <= 0}
+                              onClick={()=>beginCorporatePurchase(l)}
                               className="px-3 py-1 rounded bg-emerald-600 hover:bg-emerald-500 text-xs disabled:opacity-40"
-                            >{buyingId===l.id?'Buying…':'Buy Now'}</button>
-                          </>
-                        )}
-                        {l.demo && (
+                              disabled={purchaseBusy !== null}
+                            >Purchase</button>
+                          ) : account && account!==l.seller ? (
+                            <div className="flex items-center gap-2">
+                              <input
+                                value={quantities[l.id]||''}
+                                onChange={e=>{ const v = e.target.value; if(!/^[0-9]*$/.test(v)) return; setQuantities(q=>({...q,[l.id]:v})); }}
+                                placeholder="Qty"
+                                className="w-16 bg-neutral-900 border border-neutral-700 rounded px-1 py-1 text-xs focus:outline-none"
+                              />
+                              <button
+                                onClick={()=>{ const raw = parsePositiveInt(quantities[l.id]||'0','qty'+l.id, Math.round(l.remaining_tokens)); if(raw==null) return; buy(l.id, raw); }}
+                                disabled={buyingId===l.id||l.remaining_tokens <= 0}
+                                className="px-3 py-1 rounded bg-emerald-600 hover:bg-emerald-500 text-xs disabled:opacity-40"
+                              >{buyingId===l.id?'Buying…':'Buy Now'}</button>
+                            </div>
+                          ) : (
+                            <span className="text-[11px] text-neutral-500">Not available</span>
+                          )
+                        ) : (
                           <button disabled className="px-3 py-1 rounded bg-neutral-800 text-neutral-400 text-xs">Buy (demo)</button>
                         )}
                       </td>
@@ -208,20 +424,30 @@ export default function MarketplacePage() {
                     </div>
                   </div>
                   <div className="mt-4 flex items-center gap-2">
-                    {!l.demo && account && account!==l.seller ? (
-                      <>
-                        <input
-                          value={quantities[l.id]||''}
-                          onChange={e=>{ const v = e.target.value; if(!/^[0-9]*$/.test(v)) return; setQuantities(q=>({...q,[l.id]:v})); }}
-                          placeholder="Qty"
-                          className="w-20 bg-neutral-900 border border-neutral-700 rounded px-2 py-1 text-xs focus:outline-none"
-                        />
+                    {!l.demo ? (
+                      isCorporate ? (
                         <button
-                          onClick={()=>{ const raw = parsePositiveInt(quantities[l.id]||'0','qty'+l.id, Math.round(l.remaining_tokens)); if(raw==null) return; buy(l.id, raw); }}
-                          disabled={buyingId===l.id||l.remaining_tokens <= 0}
+                          onClick={()=>beginCorporatePurchase(l)}
                           className="px-3 py-2 rounded bg-emerald-600 hover:bg-emerald-500 text-sm disabled:opacity-40"
-                        >{buyingId===l.id?'Buying…':'Buy Now'}</button>
-                      </>
+                          disabled={purchaseBusy !== null}
+                        >Purchase</button>
+                      ) : account && account!==l.seller ? (
+                        <>
+                          <input
+                            value={quantities[l.id]||''}
+                            onChange={e=>{ const v = e.target.value; if(!/^[0-9]*$/.test(v)) return; setQuantities(q=>({...q,[l.id]:v})); }}
+                            placeholder="Qty"
+                            className="w-20 bg-neutral-900 border border-neutral-700 rounded px-2 py-1 text-xs focus:outline-none"
+                          />
+                          <button
+                            onClick={()=>{ const raw = parsePositiveInt(quantities[l.id]||'0','qty'+l.id, Math.round(l.remaining_tokens)); if(raw==null) return; buy(l.id, raw); }}
+                            disabled={buyingId===l.id||l.remaining_tokens <= 0}
+                            className="px-3 py-2 rounded bg-emerald-600 hover:bg-emerald-500 text-sm disabled:opacity-40"
+                          >{buyingId===l.id?'Buying…':'Buy Now'}</button>
+                        </>
+                      ) : (
+                        <span className="text-[11px] text-neutral-500">Not available</span>
+                      )
                     ) : (
                       <button disabled className="px-3 py-2 rounded bg-neutral-800 text-neutral-400 text-sm w-full sm:w-auto">Buy (demo)</button>
                     )}
@@ -232,6 +458,83 @@ export default function MarketplacePage() {
           )}
         </div>
       </section>
+      {purchaseListing && (
+        <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/70 backdrop-blur-sm px-4">
+          <div className="w-full max-w-lg rounded-xl border border-neutral-800 bg-neutral-950 p-6 shadow-xl">
+            <div className="flex items-start justify-between">
+              <div>
+                <h3 className="text-lg font-semibold">Confirm Purchase</h3>
+                <p className="mt-1 text-xs text-neutral-400">Listing #{purchaseListing.id} · {purchaseListing.remaining_tokens.toLocaleString(undefined, { maximumFractionDigits: 0 })} tokens remaining</p>
+              </div>
+              <button onClick={closePurchaseModal} className="text-neutral-400 hover:text-neutral-200 text-sm">Close</button>
+            </div>
+            <div className="mt-4 rounded-lg border border-neutral-800 bg-neutral-900/40 p-4 text-sm">
+              <div className="flex items-center justify-between">
+                <span className="text-neutral-400">Unit price</span>
+                <span className="font-medium">{formatINR(purchaseListing.unit_price)}</span>
+              </div>
+              <div className="mt-2 flex items-center justify-between">
+                <span className="text-neutral-400">Quantity</span>
+                <div className="flex items-center gap-2">
+                  <input
+                    value={purchaseQuantity}
+                    onChange={e => {
+                      const raw = e.target.value.trim();
+                      if (raw === '' || /^[0-9]+$/.test(raw)) {
+                        setPurchaseQuantity(raw || '');
+                      }
+                    }}
+                    placeholder="Tokens"
+                    className="w-24 rounded border border-neutral-700 bg-neutral-950 px-3 py-1 text-right text-sm focus:outline-none"
+                  />
+                  <span className="text-[11px] text-neutral-500">Max {purchaseLimit.toLocaleString()}</span>
+                </div>
+              </div>
+              <div className="mt-2 flex items-center justify-between">
+                <span className="text-neutral-400">Total payable</span>
+                <span className="text-base font-semibold">{formatINR(totalCostRupees)}</span>
+              </div>
+            </div>
+
+            <div className="mt-4 space-y-2 text-xs text-neutral-400">
+              <div className="flex items-center justify-between text-sm">
+                <span>Miko wallet balance</span>
+                <span className="font-medium text-neutral-100">{walletLoading ? 'Loading…' : formatINR(walletBalanceRupees)}</span>
+              </div>
+              {walletStatus && <div className="rounded border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-amber-200">{walletStatus}</div>}
+              {purchaseError && <div className="rounded border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-rose-200 text-sm">{purchaseError}</div>}
+              {purchaseStatus && <div className="rounded border border-emerald-500/40 bg-emerald-500/10 px-3 py-2 text-emerald-200 text-sm">{purchaseStatus}</div>}
+              <p>Funds will be debited from your selected payment method and routed to the seller&apos;s wallet. Token transfer finalises after on-chain settlement.</p>
+              {!linkedAptosWallet && (
+                <p className="rounded border border-rose-500/30 bg-rose-500/10 px-3 py-2 text-rose-200">Link an Aptos wallet in your profile to complete purchases.</p>
+              )}
+            </div>
+
+            <div className="mt-6 grid gap-3 sm:grid-cols-2">
+              <button
+                className="rounded-lg bg-emerald-600 px-3 py-2 text-sm font-medium text-white hover:bg-emerald-500 disabled:cursor-not-allowed disabled:opacity-40"
+                disabled={!quantityValid || purchaseBusy === 'wallet'}
+                onClick={() => {
+                  if (purchaseListing && quantityValid) {
+                    void handleCorporateWalletPurchase(purchaseListing, selectedQuantity);
+                  }
+                }}
+              >{purchaseBusy === 'wallet' ? 'Processing…' : 'Pay with Miko Wallet'}</button>
+              <button
+                className="rounded-lg border border-neutral-700 px-3 py-2 text-sm font-medium text-neutral-100 hover:border-neutral-500 disabled:cursor-not-allowed disabled:opacity-40"
+                disabled={!quantityValid || purchaseBusy === 'razorpay'}
+                onClick={() => {
+                  if (purchaseListing && quantityValid) {
+                    void handleCorporateRazorpayPurchase(purchaseListing, selectedQuantity);
+                  }
+                }}
+              >{purchaseBusy === 'razorpay' ? 'Opening Razorpay…' : 'Pay with Razorpay'}</button>
+            </div>
+
+            <p className="mt-4 text-[11px] text-neutral-500">Need help? Contact support with the listing ID and your payment reference.</p>
+          </div>
+        </div>
+      )}
     </main>
   );
 }

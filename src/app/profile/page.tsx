@@ -113,18 +113,18 @@ export default function ProfilePage(){
   const [saving, setSaving] = useState(false);
   const [statusMsg, setStatusMsg] = useState<string| null>(null);
   const [walletAddr, setWalletAddr] = useState<string | null>(null);
-  
+
   // Backend data (supplementary stats only)
   const [stats, setStats] = useState<ProfileStats>({ treesApproved: 0, treesPending: 0, treesRejected: 0, totalCCT: 0 });
   const [backendTrees, setBackendTrees] = useState<BackendTree[]>([]);
   const [loadingBackend, setLoadingBackend] = useState(false);
-  
+
   // Blockchain data (PRIMARY source - shows all requests)
   const [trees, setTrees] = useState<Tree[]>([]);
   const [requests, setRequests] = useState<Request[]>([]);
   const [loadingOnchain, setLoadingOnchain] = useState(false);
-  const [modulesError, setModulesError] = useState<string | null>(null)
-  
+  const [modulesError, setModulesError] = useState<string | null>(null);
+
   const [sellOpen, setSellOpen] = useState(false);
   const [sellAmount, setSellAmount] = useState<number>(0);
   const [sellSubmitting, setSellSubmitting] = useState(false);
@@ -147,13 +147,15 @@ export default function ProfilePage(){
   const [cryptoTopupInfo, setCryptoTopupInfo] = useState<CryptoTopupInfo | null>(null);
   const [showBankModal, setShowBankModal] = useState(false);
   const [bankSubmitting, setBankSubmitting] = useState(false);
-  
+
   // Details modal state
   const [showDetailsModal, setShowDetailsModal] = useState(false);
   const [detailsRequest, setDetailsRequest] = useState<Request | null>(null);
   const [detailsMetadata, setDetailsMetadata] = useState<any>(null);
   const isCorporate = user?.role === 'CORPORATE';
   const isIndividual = user?.role === 'INDIVIDUAL';
+  const walletBalanceInr = walletSummary?.balanceInr ?? paiseToRupees(walletSummary?.balancePaise ?? 0);
+  const latestWalletTx = walletTransactions.length > 0 ? walletTransactions[0] : null;
 
   useEffect(()=>{ setUsername(user?.username || ''); }, [user?.username]);
 
@@ -165,22 +167,38 @@ export default function ProfilePage(){
   const approved = myRequests.filter(r=> r.status === 2);
   const rejected = myRequests.filter(r=> r.status === 3);
   const myTrees = useMemo(()=> walletAddr ? trees.filter(t=> t.owner.toLowerCase() === walletAddr.toLowerCase()) : [], [walletAddr, trees]);
-  
+  const cctBalanceTokens = useMemo(() => microToTokens(cctBalance), [cctBalance]);
+  const corporateHoldings = useMemo(() => (isCorporate ? myTrees : []), [isCorporate, myTrees]);
+
   // Calculate total CCT granted from all approved requests
   const totalCCTGranted = useMemo(() => {
-  return approved.reduce((sum, req) => sum + (req.granted_cct ?? ratePpmToTokens(req.rate_ppm)), 0);
+    return approved.reduce((sum, req) => sum + (req.granted_cct ?? ratePpmToTokens(req.rate_ppm)), 0);
   }, [approved]);
+
+  const soldTokens = useMemo(() => {
+    if (isCorporate) return 0;
+    if (!walletTransactions.length) return 0;
+    const SALE_PRICE_PAISE = 500 * 100;
+    const totalSalePaise = walletTransactions.reduce((sum, tx) => {
+      const isCredit = tx.direction === 'CREDIT';
+      const isSaleRef = tx.referenceType === 'MARKETPLACE_SALE';
+      const looksLikeSale = typeof tx.description === 'string' && tx.description.toLowerCase().includes('fiat credit for listing');
+      if (!isCredit || (!isSaleRef && !looksLikeSale)) return sum;
+      return sum + (tx.amountPaise || 0);
+    }, 0);
+    if (totalSalePaise <= 0) return 0;
+    return Math.max(0, Math.floor(totalSalePaise / SALE_PRICE_PAISE));
+  }, [isCorporate, walletTransactions]);
 
   // Load from Backend API (MongoDB cache) - SUPPLEMENTARY method for stats only
   const loadStatsFromBackend = useCallback(async () => {
     if (!token) return;
     try {
-      // Load profile stats from backend (cached data)
       const profileRes = await fetch(`${API}/api/profile/me`, {
         credentials: 'include',
         headers: { 'Authorization': `Bearer ${token}` }
       });
-      
+
       if (profileRes.ok) {
         const profileData = await profileRes.json();
         setStats(profileData.stats || { treesApproved: 0, treesPending: 0, treesRejected: 0, totalCCT: 0 });
@@ -193,18 +211,17 @@ export default function ProfilePage(){
         }));
       }
 
-      // Load approved trees from backend (only approved ones are in DB)
       const treesRes = await fetch(`${API}/api/profile/trees?status=approved`, {
         credentials: 'include',
         headers: { 'Authorization': `Bearer ${token}` }
       });
-      
+
       if (treesRes.ok) {
-        const treesData = await treesRes.json();
-        setBackendTrees(treesData.trees || []);
+        const treeData = await treesRes.json();
+        setBackendTrees(treeData.trees || []);
       }
-    } catch (err) {
-      console.error('[Profile] Backend API error:', err);
+    } catch (error) {
+      console.error('[Profile] Backend stats load failed:', error);
     }
   }, [token]);
 
@@ -775,8 +792,92 @@ export default function ProfilePage(){
         </div>
       </section>
 
-      {/* Dashboard section */}
-      <section className="mb-8 rounded-2xl border border-white/10 bg-white/5 p-5">
+      {isCorporate && (
+        <>
+          <section className="mb-8 rounded-2xl border border-white/10 bg-white/5 p-5">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <h2 className="text-lg font-semibold">Corporate Overview</h2>
+              <button
+                className="btn-secondary"
+                onClick={() => { void refreshWalletSummary(); }}
+                disabled={walletLoading}
+              >
+                {walletLoading ? 'Refreshing…' : 'Refresh balance'}
+              </button>
+            </div>
+            <div className="mt-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+              <div className="rounded-xl border border-white/10 bg-neutral-900/60 p-4">
+                <div className="text-xs uppercase tracking-wide text-neutral-500">Wallet balance</div>
+                <div className="mt-2 text-2xl font-semibold text-white">{formatINR(walletBalanceInr)}</div>
+                <div className="mt-1 text-[11px] text-neutral-500">
+                  {walletSummary?.updatedAt ? `Updated ${new Date(walletSummary.updatedAt).toLocaleString()}` : 'Balance updates after each purchase'}
+                </div>
+              </div>
+              <div className="rounded-xl border border-white/10 bg-neutral-900/60 p-4">
+                <div className="text-xs uppercase tracking-wide text-neutral-500">CCT tokens held</div>
+                <div className="mt-2 text-2xl font-semibold text-white">{formatTokens(cctBalanceTokens)} CCT</div>
+                <div className="mt-1 text-[11px] text-neutral-500">
+                  {walletAddr ? `Wallet ${walletAddr.slice(0, 6)}…${walletAddr.slice(-4)} • On-chain snapshot` : 'Link a wallet to view on-chain holdings'}
+                </div>
+              </div>
+              <div className="rounded-xl border border-white/10 bg-neutral-900/60 p-4">
+                <div className="text-xs uppercase tracking-wide text-neutral-500">Latest activity</div>
+                {latestWalletTx ? (
+                  <div className="mt-2 space-y-1 text-sm text-neutral-300">
+                    <div className="font-semibold text-white">{latestWalletTx.description || latestWalletTx.referenceType || 'Wallet movement'}</div>
+                    <div className={latestWalletTx.direction === 'CREDIT' ? 'text-emerald-400 text-sm' : 'text-red-400 text-sm'}>
+                      {latestWalletTx.direction === 'CREDIT' ? '+' : '-'}{formatINR(paiseToRupees(latestWalletTx.amountPaise))}
+                    </div>
+                    <div className="text-[11px] text-neutral-500">{new Date(latestWalletTx.createdAt).toLocaleString()}</div>
+                  </div>
+                ) : (
+                  <div className="mt-2 text-sm text-neutral-400">No wallet movements yet.</div>
+                )}
+              </div>
+              <div className="rounded-xl border border-white/10 bg-neutral-900/60 p-4">
+                <div className="text-xs uppercase tracking-wide text-neutral-500">Settlement notes</div>
+                <p className="mt-2 text-sm text-neutral-300 leading-relaxed">
+                  Purchases debit your corporate wallet instantly and credit the seller&apos;s rupee wallet. Token transfers finalise automatically via the marketplace robot.
+                </p>
+              </div>
+            </div>
+            <div className="mt-6 flex flex-wrap gap-3">
+              <Link href="/marketplace" className="btn-primary">Browse marketplace</Link>
+              <Link href="/marketplace-overview" className="btn-secondary">View buying guide</Link>
+            </div>
+          </section>
+
+          <section className="mb-8 rounded-2xl border border-white/10 bg-white/5 p-5">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <h3 className="text-lg font-semibold">Token Lots</h3>
+                <p className="text-xs text-neutral-500 mt-1">Every CCT lot currently owned by your corporate wallet.</p>
+              </div>
+              {walletAddr ? (
+                <div className="text-xs text-neutral-500 break-all">Wallet: {walletAddr}</div>
+              ) : (
+                <button className="btn-secondary" onClick={()=> void connectWallet()}>Link wallet to view</button>
+              )}
+            </div>
+            {walletAddr ? (
+              <div className="mt-4">
+                <CardsGrid emptyText="No marketplace tokens yet.">
+                  {corporateHoldings.map((tree) => (
+                    <HoldingCard key={tree.id} tree={tree} />
+                  ))}
+                </CardsGrid>
+              </div>
+            ) : (
+              <div className="mt-4 rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-sm text-amber-100">
+                Link an Aptos wallet to surface the token lots associated with your corporate account.
+              </div>
+            )}
+          </section>
+        </>
+      )}
+
+      {!isCorporate && (
+        <section className="mb-8 rounded-2xl border border-white/10 bg-white/5 p-5">
         <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
           <h2 className="text-lg font-semibold">Dashboard</h2>
           {walletAddr ? (
@@ -798,12 +899,13 @@ export default function ProfilePage(){
             <button className="btn-primary" onClick={()=> void connectWallet()}>Connect Wallet to Load</button>
           )}
         </div>
-  <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+  <div className="grid grid-cols-2 md:grid-cols-6 gap-3">
           <StatCard label="Pending" value={pending.length} />
           <StatCard label="Approved" value={approved.length} />
           <StatCard label="Rejected" value={rejected.length} />
           <StatCard label="Total CCT Granted" value={formatTokens(totalCCTGranted)} />
           <StatCard label="Listed (Escrowed)" value={formatTokens(listedCct)} />
+    <StatCard label="Sold to Buyers" value={formatTokens(soldTokens)} />
         </div>
         <div className="mt-4 flex gap-3 flex-wrap">
           <Link href="/marketplace" className="btn-secondary">Go to Marketplace</Link>
@@ -866,6 +968,7 @@ export default function ProfilePage(){
           ℹ️ <strong>How it works:</strong> When your tree request is approved, you receive CCT tokens (shown in &ldquo;Total CCT Granted&rdquo;). You can list these tokens on the marketplace at ₹500 per token. Buyers pay in rupees and receive the CCT tokens.
         </div>
       </section>
+      )}
 
       <section className="mb-8 p-4 rounded-xl border border-neutral-800 bg-neutral-900/40">
         <h2 className="text-lg font-semibold mb-3">Account</h2>
@@ -895,89 +998,92 @@ export default function ProfilePage(){
         </div>
       </section>
 
-      {/* Requests sections */}
-      <section className="mb-8 rounded-2xl border border-white/10 bg-white/5 p-5">
-        <h2 className="text-lg font-semibold mb-4">Pending Requests</h2>
-        <CardsGrid emptyText={walletAddr? 'No pending requests' : 'Connect wallet to view'}>
-          {pending.map(r => (
-            <RequestCard key={r.id} r={r} onDetailsClick={() => handleShowDetails(r)} />
-          ))}
-        </CardsGrid>
-      </section>
+      {!isCorporate && (
+        <>
+          <section className="mb-8 rounded-2xl border border-white/10 bg-white/5 p-5">
+            <h2 className="text-lg font-semibold mb-4">Pending Requests</h2>
+            <CardsGrid emptyText={walletAddr? 'No pending requests' : 'Connect wallet to view'}>
+              {pending.map(r => (
+                <RequestCard key={r.id} r={r} onDetailsClick={() => handleShowDetails(r)} />
+              ))}
+            </CardsGrid>
+          </section>
 
-      <section className="mb-8 rounded-2xl border border-white/10 bg-white/5 p-5">
-        <h2 className="text-lg font-semibold mb-4">Approved</h2>
-        <CardsGrid emptyText={walletAddr? 'No approved requests yet' : 'Connect wallet to view'}>
-          {approved.map(r => (
-            <RequestCard 
-              key={r.id} 
-              r={r} 
-              approved 
-              onDetailsClick={() => handleShowDetails(r)}
-            />
-          ))}
-        </CardsGrid>
-      </section>
+          <section className="mb-8 rounded-2xl border border-white/10 bg-white/5 p-5">
+            <h2 className="text-lg font-semibold mb-4">Approved</h2>
+            <CardsGrid emptyText={walletAddr? 'No approved requests yet' : 'Connect wallet to view'}>
+              {approved.map(r => (
+                <RequestCard 
+                  key={r.id} 
+                  r={r} 
+                  approved 
+                  onDetailsClick={() => handleShowDetails(r)}
+                />
+              ))}
+            </CardsGrid>
+          </section>
 
-      <section className="mb-8 rounded-2xl border border-white/10 bg-white/5 p-5">
-        <div className="flex items-center justify-between mb-4 gap-3 flex-wrap">
-          <h2 className="text-lg font-semibold">Marketplace Listings</h2>
-          <span className="text-xs text-neutral-500">Tokens escrowed: {formatTokens(listedCct)}</span>
-        </div>
-        {walletAddr ? (
-          userListings.length === 0 ? (
-            <div className="text-sm text-neutral-400">No active listings in the marketplace.</div>
-          ) : (
-            <div className="overflow-x-auto rounded-xl border border-white/10 bg-black/20">
-              <table className="w-full text-sm">
-                <thead className="bg-white/5 text-neutral-400 text-xs uppercase tracking-wide">
-                  <tr>
-                    <th className="px-4 py-3 text-left">Listing #</th>
-                    <th className="px-4 py-3 text-left">Tokens</th>
-                    <th className="px-4 py-3 text-left">Unit Price (₹)</th>
-                    <th className="px-4 py-3 text-left">Created</th>
-                    <th className="px-4 py-3 text-right">Actions</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-white/5">
-                  {userListings.map((listing) => (
-                    <tr key={listing.id} className="hover:bg-white/5 transition-colors">
-                      <td className="px-4 py-3 font-mono text-xs">#{listing.id}</td>
-                      <td className="px-4 py-3">{formatTokens(listing.remaining_tokens)}</td>
-                      <td className="px-4 py-3">₹ {listing.unit_price}</td>
-                      <td className="px-4 py-3 text-xs text-neutral-400">
-                        {listing.created_at ? new Date(listing.created_at * 1000).toLocaleString() : '—'}
-                      </td>
-                      <td className="px-4 py-3 text-right">
-                        <button
-                          className="btn-secondary text-xs"
-                          onClick={() => {
-                            setActiveListing(listing);
-                            setListingModalOpen(true);
-                          }}
-                        >
-                          Details
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+          <section className="mb-8 rounded-2xl border border-white/10 bg-white/5 p-5">
+            <div className="flex items-center justify-between mb-4 gap-3 flex-wrap">
+              <h2 className="text-lg font-semibold">Marketplace Listings</h2>
+              <span className="text-xs text-neutral-500">Tokens escrowed: {formatTokens(listedCct)}</span>
             </div>
-          )
-        ) : (
-          <div className="text-sm text-neutral-400">Connect your wallet to view marketplace listings.</div>
-        )}
-      </section>
+            {walletAddr ? (
+              userListings.length === 0 ? (
+                <div className="text-sm text-neutral-400">No active listings in the marketplace.</div>
+              ) : (
+                <div className="overflow-x-auto rounded-xl border border-white/10 bg-black/20">
+                  <table className="w-full text-sm">
+                    <thead className="bg-white/5 text-neutral-400 text-xs uppercase tracking-wide">
+                      <tr>
+                        <th className="px-4 py-3 text-left">Listing #</th>
+                        <th className="px-4 py-3 text-left">Tokens</th>
+                        <th className="px-4 py-3 text-left">Unit Price (₹)</th>
+                        <th className="px-4 py-3 text-left">Created</th>
+                        <th className="px-4 py-3 text-right">Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-white/5">
+                      {userListings.map((listing) => (
+                        <tr key={listing.id} className="hover:bg-white/5 transition-colors">
+                          <td className="px-4 py-3 font-mono text-xs">#{listing.id}</td>
+                          <td className="px-4 py-3">{formatTokens(listing.remaining_tokens)}</td>
+                          <td className="px-4 py-3">₹ {listing.unit_price}</td>
+                          <td className="px-4 py-3 text-xs text-neutral-400">
+                            {listing.created_at ? new Date(listing.created_at * 1000).toLocaleString() : '—'}
+                          </td>
+                          <td className="px-4 py-3 text-right">
+                            <button
+                              className="btn-secondary text-xs"
+                              onClick={() => {
+                                setActiveListing(listing);
+                                setListingModalOpen(true);
+                              }}
+                            >
+                              Details
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )
+            ) : (
+              <div className="text-sm text-neutral-400">Connect your wallet to view marketplace listings.</div>
+            )}
+          </section>
 
-      <section className="mb-8 rounded-2xl border border-white/10 bg-white/5 p-5">
-        <h2 className="text-lg font-semibold mb-4">Rejected</h2>
-        <CardsGrid emptyText={walletAddr? 'No rejected requests' : 'Connect wallet to view'}>
-          {rejected.map(r => (
-            <RequestCard key={r.id} r={r} rejected onDetailsClick={() => handleShowDetails(r)} />
-          ))}
-        </CardsGrid>
-      </section>
+          <section className="mb-8 rounded-2xl border border-white/10 bg-white/5 p-5">
+            <h2 className="text-lg font-semibold mb-4">Rejected</h2>
+            <CardsGrid emptyText={walletAddr? 'No rejected requests' : 'Connect wallet to view'}>
+              {rejected.map(r => (
+                <RequestCard key={r.id} r={r} rejected onDetailsClick={() => handleShowDetails(r)} />
+              ))}
+            </CardsGrid>
+          </section>
+        </>
+      )}
 
       <section className="mb-8 p-4 rounded-xl border border-neutral-800 bg-neutral-900/40">
         <h2 className="text-lg font-semibold mb-3">Preferences</h2>
@@ -1206,6 +1312,77 @@ function RequestCard({ r, approved, rejected, onDetailsClick }:{ r: Request; app
         {onDetailsClick && (
           <button onClick={onDetailsClick} className="mt-2 btn-secondary w-full">View Details</button>
         )}
+      </div>
+    </div>
+  );
+}
+
+function HoldingCard({ tree }: { tree: Tree }) {
+  const mintedAt = tree.created_at ? new Date(tree.created_at * 1000).toLocaleString() : '—';
+  const tokens = formatTokens(tree.granted_cct ?? 0);
+  const [imageUrl, setImageUrl] = React.useState<string | null>(null);
+  const [metadata, setMetadata] = React.useState<any>(null);
+
+  React.useEffect(() => {
+    let cancelled = false;
+    const loadMeta = async () => {
+      if (!tree.metadata_uri) return;
+      try {
+        let fetchUrl = tree.metadata_uri;
+        if (fetchUrl.startsWith('ipfs://')) {
+          fetchUrl = `https://gateway.pinata.cloud/ipfs/${fetchUrl.replace('ipfs://', '')}`;
+        }
+        const resp = await fetch(fetchUrl, { cache: 'reload' });
+        if (!resp.ok) return;
+        const data = await resp.json();
+        if (cancelled) return;
+        setMetadata(data);
+        const rawImage = data?.image;
+        if (typeof rawImage === 'string' && rawImage.length > 0) {
+          const resolved = rawImage.startsWith('ipfs://') ? `https://gateway.pinata.cloud/ipfs/${rawImage.replace('ipfs://', '')}` : rawImage;
+          setImageUrl(resolved);
+        }
+      } catch (error) {
+        console.error('[Profile] Failed to load holding metadata:', error);
+      }
+    };
+    loadMeta();
+    return () => { cancelled = true; };
+  }, [tree.metadata_uri]);
+
+  return (
+    <div className="flex flex-col overflow-hidden rounded-xl border border-white/10 bg-black/40">
+      {imageUrl && (
+        <div className="h-40 w-full bg-neutral-800">
+          <img
+            src={imageUrl}
+            alt={metadata?.attributes?.name || `Tree ${tree.id}`}
+            className="h-full w-full object-cover"
+            onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }}
+          />
+        </div>
+      )}
+      <div className="flex flex-1 flex-col gap-2 p-4">
+        <div className="text-sm text-neutral-400">Lot #{tree.id}</div>
+        {metadata?.attributes?.name && (
+          <div className="text-base font-semibold text-white">{metadata.attributes.name}</div>
+        )}
+        {metadata?.attributes?.speciesCommon && (
+          <div className="text-sm text-neutral-300">🌳 {metadata.attributes.speciesCommon}</div>
+        )}
+        <div className="mt-2 flex items-center justify-between rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-2">
+          <span className="text-xs uppercase tracking-wide text-emerald-300">Tokens held</span>
+          <span className="text-lg font-semibold text-emerald-200">{tokens} CCT</span>
+        </div>
+        <div className="text-xs text-neutral-500">
+          Acquired: {mintedAt}
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <Link href={`/asset/${tree.id}`} className="btn-secondary text-xs">View asset</Link>
+          {metadata?.attributes?.project && (
+            <span className="rounded-full border border-white/10 px-2 py-0.5 text-[11px] text-neutral-400">{metadata.attributes.project}</span>
+          )}
+        </div>
       </div>
     </div>
   );
@@ -1492,6 +1669,147 @@ function DetailsModal({ request, metadata, onClose }: { request: Request; metada
         
         <div className="mt-6 flex justify-end">
           <button onClick={onClose} className="btn-primary">Close</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function CorporatePurchaseModal({
+  listing,
+  onClose,
+  onWallet,
+  onRazorpay,
+  busy,
+  walletBalancePaise,
+  aptosWalletAddress,
+  error
+}: {
+  listing: Listing;
+  onClose: () => void;
+  onWallet: (quantity: number) => void | Promise<void>;
+  onRazorpay: (quantity: number) => void | Promise<void>;
+  busy: 'wallet' | 'razorpay' | null;
+  walletBalancePaise: number;
+  aptosWalletAddress: string | null | undefined;
+  error: string | null;
+}) {
+  const [quantity, setQuantity] = React.useState<string>('1');
+  const [localError, setLocalError] = React.useState<string | null>(null);
+
+  React.useEffect(() => {
+    setQuantity('1');
+    setLocalError(null);
+  }, [listing]);
+
+  const maxTokens = Math.max(0, Math.round(listing.remaining_tokens));
+  const parsedQty = Number.parseInt(quantity, 10);
+  const quantityValid = Number.isInteger(parsedQty) && parsedQty > 0 && parsedQty <= maxTokens;
+  const totalPaise = quantityValid ? Math.round(parsedQty * listing.unit_price * 100) : 0;
+  const totalInr = paiseToRupees(totalPaise);
+  const walletBalanceInr = paiseToRupees(walletBalancePaise);
+  const walletSufficient = quantityValid && walletBalancePaise >= totalPaise;
+  const disableWallet = busy !== null || !quantityValid || !walletSufficient || !aptosWalletAddress;
+  const disableRazorpay = busy !== null || !quantityValid || !aptosWalletAddress;
+  const combinedError = localError || error;
+
+  const onQuantityChange = (value: string) => {
+    const digits = value.replace(/[^0-9]/g, '');
+    setQuantity(digits);
+    setLocalError(null);
+  };
+
+  const submitWallet = () => {
+    if (!quantityValid) {
+      setLocalError('Enter a valid quantity within the listing availability.');
+      return;
+    }
+    onWallet(parsedQty);
+  };
+
+  const submitRazorpay = () => {
+    if (!quantityValid) {
+      setLocalError('Enter a valid quantity within the listing availability.');
+      return;
+    }
+    onRazorpay(parsedQty);
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+      <div className="absolute inset-0 bg-black/70" onClick={onClose} />
+      <div className="relative z-10 w-full max-w-lg rounded-2xl border border-white/10 bg-[var(--surface-glass)] p-6">
+        <div className="flex items-start justify-between">
+          <h3 className="text-xl font-semibold">Buy Tokens</h3>
+          <button onClick={onClose} className="text-neutral-400 hover:text-white text-2xl leading-none">&times;</button>
+        </div>
+        <div className="mt-2 text-[11px] text-neutral-400 font-mono">
+          Listing #{listing.id} • Seller {listing.seller.slice(0, 6)}…{listing.seller.slice(-4)}
+        </div>
+
+        <div className="mt-4 space-y-4">
+          <div>
+            <label className="text-xs uppercase tracking-wide text-neutral-500">Quantity (max {maxTokens})</label>
+            <input
+              value={quantity}
+              onChange={(e) => onQuantityChange(e.target.value)}
+              inputMode="numeric"
+              pattern="[0-9]*"
+              placeholder="1"
+              disabled={busy !== null}
+              className="mt-1 w-full rounded-md border border-white/10 bg-neutral-900 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-emerald-500/30"
+            />
+            <div className="mt-1 text-[11px] text-neutral-500">Enter whole tokens only.</div>
+          </div>
+          <div className="rounded-lg border border-white/10 bg-neutral-900/60 p-3 text-sm">
+            <div className="flex items-center justify-between text-xs text-neutral-400">
+              <span>Unit price</span>
+              <span>₹ {listing.unit_price}</span>
+            </div>
+            <div className="mt-2 flex items-center justify-between">
+              <span className="text-xs text-neutral-400">Total</span>
+              <span className="text-lg font-semibold text-white">{formatINR(totalInr)}</span>
+            </div>
+            <div className="mt-2 flex items-center justify-between text-xs text-neutral-400">
+              <span>Miko wallet balance</span>
+              <span className={walletSufficient ? 'text-emerald-300' : 'text-red-300'}>{formatINR(walletBalanceInr)}</span>
+            </div>
+            {!walletSufficient && quantityValid ? (
+              <div className="mt-1 text-[11px] text-red-300">Balance is lower than the purchase total.</div>
+            ) : null}
+            {aptosWalletAddress ? (
+              <div className="mt-2 text-[11px] text-neutral-500">
+                Delivery wallet: {aptosWalletAddress.slice(0, 10)}…{aptosWalletAddress.slice(-6)}
+              </div>
+            ) : null}
+          </div>
+          {!aptosWalletAddress ? (
+            <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-100">
+              Link an Aptos wallet to continue. Purchases need a delivery address for CCT tokens.
+            </div>
+          ) : null}
+          {combinedError ? (
+            <div className="rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs text-red-200">
+              {combinedError}
+            </div>
+          ) : null}
+        </div>
+
+        <div className="mt-5 flex flex-col gap-3 sm:flex-row">
+          <button
+            className="flex-1 rounded-md bg-emerald-600 px-4 py-2 text-sm font-medium text-black transition-colors hover:bg-emerald-500 disabled:cursor-not-allowed disabled:opacity-40"
+            onClick={submitWallet}
+            disabled={disableWallet}
+          >
+            {busy === 'wallet' ? 'Processing…' : 'Pay with Wallet'}
+          </button>
+          <button
+            className="flex-1 rounded-md border border-white/10 bg-neutral-800 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-neutral-700 disabled:cursor-not-allowed disabled:opacity-40"
+            onClick={submitRazorpay}
+            disabled={disableRazorpay}
+          >
+            {busy === 'razorpay' ? 'Opening Razorpay…' : 'Pay with Razorpay'}
+          </button>
         </div>
       </div>
     </div>
