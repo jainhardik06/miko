@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="https://raw.githubusercontent.com/jainhardik06/miko/main/public/logo.png" alt="Miko Logo" width="150">
+  <img src="https://drive.google.com/u/0/drive-viewer/AKGpihYy-0Xi8JcBqEQDc2YhBhXukDYZ9XDMewor7by_D5Yyu3LRAgmjc_O4Hk6R7ck2dp0PJJZUT1eWnRxJdId8RpP6CpifxGCNYA=s2560" alt="Miko Logo" width="150">
   <h1>Miko – Narrative Cascade</h1>
   <p><strong>Turn India's Green Cover into Digital Gold</strong></p>
   <p>Miko is a full-stack Web3 platform that tokenizes real-world ecological assets, starting with trees, into on-chain Carbon Credit Tokens (CCTs). It combines an immersive WebGL frontend with a robust backend infrastructure and Aptos smart contracts to create a transparent, verifiable, and engaging marketplace for environmental impact.</p>
