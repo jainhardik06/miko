@@ -1,103 +1,276 @@
 <div align="center">
-<h1>Miko – Narrative Cascade</h1>
-<p><strong>Turn India's Green Cover into Digital Gold</strong></p>
-<p>Cinematic WebGL storytelling for ecological asset tokenization.</p>
+  <img src="https://raw.githubusercontent.com/jainhardik06/miko/main/public/logo.png" alt="Miko Logo" width="150">
+  <h1>Miko – Narrative Cascade</h1>
+  <p><strong>Turn India's Green Cover into Digital Gold</strong></p>
+  <p>Miko is a full-stack Web3 platform that tokenizes real-world ecological assets, starting with trees, into on-chain Carbon Credit Tokens (CCTs). It combines an immersive WebGL frontend with a robust backend infrastructure and Aptos smart contracts to create a transparent, verifiable, and engaging marketplace for environmental impact.</p>
 </div>
 
-## Overview
-This repository hosts the immersive landing experience built with Next.js + React Three Fiber plus the on‑chain carbon credit prototype (Move modules). The evolved "Narrative Cascade" architecture replaces a monolithic scroll canvas with:
+---
 
-1. EcoGenesis Hero (core crystal shell + orbit oracles + root veins + carbon flux + growth halo)
-2. Modular feature mini-scenes (Verification, Streaming, Network) inside performance-managed glass cards
-3. Demand-based rendering + intersection visibility throttling
+## 🌟 Project Overview
 
-## Tech Stack
-- Next.js 14.2.5 / React 18.2
-- @react-three/fiber, three.js, @react-three/postprocessing (Bloom only for now)
-- Tailwind via global import + bespoke design tokens in `globals.css`
-- Move (Aptos) smart contracts for TreeNFT + Carbon Credit Token (CCT)
+Miko's mission is to bridge the gap between on-ground conservation efforts and the digital economy. It allows individuals and organizations to get their trees verified, minted as unique TreeNFTs, and accrue CCTs over time. These CCTs can then be sold on a marketplace to corporates or individuals looking to offset their carbon footprint.
 
-## Directory Highlights
+**Key Features:**
+- **Immersive Frontend:** A cinematic user experience built with Next.js and React Three Fiber (WebGL) that tells the story of environmental impact.
+- **On-Chain Verification:** Aptos smart contracts ensure the integrity and ownership of TreeNFTs and the transparent issuance of CCTs.
+- **Hybrid Payment Model:** Supports both crypto payments (via Petra Wallet) and traditional fiat payments (via Razorpay).
+- **Admin & Validator Roles:** A robust role-based system for approving tree requests and maintaining network integrity.
+- **AI-Powered Checks:** An integrated Python service for performing automated checks on user-submitted data.
+
+## 🛠️ Tech Stack
+
+- **Frontend:** Next.js, React, React Three Fiber, three.js, Tailwind CSS
+- **Backend:** Node.js, Express.js
+- **AI Service:** Python, FastAPI
+- **Database:** MongoDB Atlas
+- **Blockchain:** Aptos (Move language)
+- **File Storage:** IPFS (via Pinata)
+- **Deployment:** Vercel (Frontend), Railway (Backend & AI), MongoDB Atlas (Database)
+
+---
+
+## 🚀 Local Development Setup
+
+Follow these steps to get the entire Miko project running on your local machine.
+
+### 1. Prerequisites
+
+- [Node.js](https://nodejs.org/) (v18 or later)
+- [Python](https://www.python.org/) (v3.9 or later)
+- [Aptos CLI](https://aptos.dev/cli-tools/aptos-cli/install-aptos-cli)
+- [pnpm](https://pnpm.io/installation) (for faster package installation)
+- A code editor like [VS Code](https://code.visualstudio.com/)
+
+### 2. Clone the Repository
+
+```bash
+git clone https://github.com/jainhardik06/miko.git
+cd miko
 ```
-src/app/page.tsx                  # Narrative composition & scroll observers
-src/components/narrative/         # Hero + mini scene set
-	EcoGenesisHeroCanvas.tsx        # Hero genesis scene (core + orbits + flux)
-	VerificationScene.tsx           # Seed validation scan ring + lattice
-	StreamingScene.tsx              # Token streaming spiral + card
-	NetworkScene.tsx                # Dynamic network hub, edges & packets
-	(Legacy: HeroForestCanvas.tsx, SeedHandsScene.tsx, TreeAssetCardScene.tsx, NetworkConnectionScene.tsx)
-src/components/mini/MiniScene.tsx # Shared wrapper (frameloop & DPR adapt)
-move/                             # On-chain carbon credit modules (Aptos)
+
+### 3. Set Up Environment Variables
+
+You need to create three separate `.env` files for the three main services.
+
+**A. Backend (`/backend/.env`)**
+
+Create a file at `backend/.env` and add the following variables. You will need to get these keys from their respective services (MongoDB Atlas, Pinata, Razorpay, etc.).
+
+```properties
+# Server
+PORT=5001
+NODE_ENV=development
+CLIENT_ORIGIN=http://localhost:3000
+
+# MongoDB Atlas Connection String
+DATABASE_URL="your_mongodb_atlas_connection_string"
+DATABASE_NAME=miko
+
+# JWT
+JWT_SECRET=a_strong_random_secret
+JWT_EXPIRES=1d
+ADMIN_JWT_EXPIRES=8h
+
+# Pinata (IPFS)
+PINATA_API_KEY="your_pinata_api_key"
+PINATA_SECRET_API_KEY="your_pinata_secret_key"
+
+# Aptos Blockchain
+# The address where your contracts are published on Devnet
+MIKO_ADDRESS="your_aptos_contract_address" 
+APTOS_NODE_URL=https://fullnode.devnet.aptoslabs.com/v1
+# The private key of your admin/deployer account
+ADMIN_PRIVATE_KEY="your_aptos_admin_private_key"
+
+# Super Admin Credentials for the Admin Panel
+SUPER_ADMIN_USERNAME=superadmin
+SUPER_ADMIN_PASSWORD_HASH="your_bcrypt_hashed_password" # Generate using backend/scripts/generate-admin-hash.js
+
+# Razorpay Test Mode
+RAZORPAY_KEY_ID="your_razorpay_test_key_id"
+RAZORPAY_KEY_SECRET="your_razorpay_test_key_secret"
+RAZORPAY_WEBHOOK_SECRET="a_strong_random_secret_for_webhook"
+
+# Custodial Hot Wallet (for Razorpay-funded transactions)
+# A fresh Aptos account's private key to act as the "robot" wallet
+FIAT_HOT_WALLET_PRIVATE_KEY="a_new_aptos_private_key"
+FIAT_HOT_WALLET_ADDRESS="the_address_for_the_private_key_above"
+
+# AI Service URL
+AI_BASE_URL=http://127.0.0.1:8000
 ```
 
-## Performance Strategy
-- Mini-scenes: IntersectionObserver toggles between `frameloop="always"` while visible / actively animating and `demand` when offscreen.
-- Hero: Runs `frameloop="demand"` and uses pointer parallax + internal animated systems (core pulse, orbit oracles, carbon flux) to call `invalidate()` implicitly each frame.
-- Instancing & batched attributes: token spiral pellets, carbon flux particles, network nodes/edges minimize draw calls.
-- Adaptive DPR (controlled in `MiniScene`): lowers pixel cost when idle while preserving sharpness on interaction.
-- Minimal post (single Bloom pass) with tuned `luminanceThreshold` to avoid over-glow.
+**B. Frontend (`/.env.local`)**
 
-## Extending a Mini-Scene
-1. Create `YourSceneNameContainer` similar to existing containers.
-2. Wrap contents in `<MiniScene>`.
-3. Use small primitive / procedural geometry first; only introduce GLTF when necessary.
-4. If a scene idles without animation, keep pure demand; call `invalidate()` manually on state/UI changes.
+Create a file at the root of the project named `.env.local`.
 
-## Parallax Camera Controls
-`ParallaxCameraController` exposes props: `intensity`, `smooth`, `maxYaw`, `maxPitch` for fine tuning. Values are intentionally modest for comfort and to preserve composition stability.
+```properties
+# The address where your contracts are published on Devnet
+NEXT_PUBLIC_MIKO_ADDRESS="your_aptos_contract_address"
 
-## Visual Language
-- Glass cards: layered radial blend, subtle border luminescence on hover.
-- Dual accent palette: ecology emerald `#19ffc0` (growth / energy) + amber `#ffb347` (oracle / validation signals).
-- Background radial gradient + animated grain for filmic depth without heavy textures.
+# The URL of your local backend server
+NEXT_PUBLIC_API_ORIGIN=http://localhost:5001
 
-## Authentication – "Digital Atrium"
-The platform ships a multi‑stage, cinematic authentication & onboarding funnel called the **Digital Atrium**. It blends glassmorphism, subtle grid/particle motifs, and staged micro‑interactions to make login / signup feel like an intentional part of the narrative rather than a blocking form.
+# The Aptos network you are using
+NEXT_PUBLIC_APTOS_NETWORK=devnet
 
-### Goals
-1. Unify login & new account pathways (email / phone, federated, wallet) inside one adaptive modal.
-2. Provide progressive disclosure: collect only what is needed per stage (entry → verification → role → corporate details).
-3. Maintain light & dark theme fidelity (studio light theme restrains bloom / emissive for readability).
-4. Offer enterprise readiness hooks (future: SSO, deeper KYC) via an extendable state machine.
-
-### Architecture Overview
+# Your Razorpay Test Key ID (this is public)
+NEXT_PUBLIC_RAZORPAY_KEY_ID="your_razorpay_test_key_id"
 ```
-<AuthProvider>
-	state: { open, stage, loading, error, role, identifiers, corporate }
-	actions: openModal(), closeModal(), go(nextStage), back(), submitOtp(code), selectRole(r), submitCorporate(data)
-<AuthModal /> (portal/dialog semantics)
-	├─ EntryStage        (#1 choose method + capture email/phone)
-	├─ OtpStage          (#2 6-digit verification)
-	├─ RoleStage         (#3 Individual vs Corporate)
-	└─ CorporateStage    (#4 Company Name, CIN, GSTIN)
+
+**C. AI Service (`/ai-service/.env`)**
+
+Create a file at `ai-service/.env`.
+
+```properties
+# The same MongoDB connection string used in the backend
+MONGO_URI="your_mongodb_atlas_connection_string"
 ```
-Render integration lives near the root layout so the modal is globally accessible (`layout.tsx` wraps children with `AuthProvider` + mounts `<AuthModal />`). A navbar button simply calls `openModal()` via the context.
 
-### Stage Flow Logic
-| Stage | Purpose | Exit Condition | Next |
-|-------|---------|----------------|------|
-| entry | Collect user identifier or federated trigger | Valid email/phone submit OR Google/Wallet click | otp / role (federated may bypass) |
-| otp | Verify short‑lived code (6 boxes) | Code accepted | role |
-| role | Choose user type | Selection + Continue | corporate (if Corporate) or close (if Individual) |
-| corporate | Gather org metadata | Valid form submit | close / downstream dashboard |
+### 4. Install Dependencies
 
-### Validation Summary
-| Field | Pattern (simplified) | Notes |
-|-------|----------------------|-------|
-| Email | `/^[^@\s]+@[^@\s]+\.[^@\s]+$/` | Intentionally lightweight – replace with robust RFC lib if needed |
-| Phone | `/^[0-9]{10}$/` (example) | Regional logic TBD; pluggable adapter recommended |
-| OTP   | 6 numeric chars | Auto‑advance & backspace navigation |
-| CIN   | `/^[A-Z0-9]{21}$/i` (placeholder) | Adjust to authoritative jurisdiction spec |
-| GSTIN | `/^[0-9A-Z]{15}$/i` | Replace with official checksum validator |
+Open three separate terminals for each service.
 
-### Styling & Micro‑Interactions
-Implemented primarily in `globals.css`:
-* **Glass Atrium Container**: layered gradient border + backdrop blur + internal radial fade.
-* **Grid / Substrate Pattern**: subtle opacity to avoid moiré on light theme.
-* **Sheen Animation** (`atriumSheen`): timed horizontal pass for premium feel (throttled to avoid distraction).
-* **Role Card Pulse** (`rolePulse`): minimal scale/opacity breathing when not focused; stops when active.
-* **Press Scale**: shared interaction class scales buttons 0.97 for tactile feedback.
-* **Cross‑Fade Stages**: framer‑motion or CSS fade ensures zero layout jump between stages.
+- **Terminal 1: Frontend (Root)**
+  ```bash
+  # In the root directory /
+  pnpm install
+  ```
+
+- **Terminal 2: Backend**
+  ```bash
+  # In the /backend directory
+  cd backend
+  pnpm install
+  ```
+
+- **Terminal 3: AI Service**
+  ```bash
+  # In the /ai-service directory
+  cd ai-service
+  python -m venv .venv
+  # Activate the virtual environment
+  # Windows
+  .\.venv\Scripts\activate
+  # macOS/Linux
+  # source .venv/bin/activate
+  pip install -r requirements.txt
+  ```
+
+### 5. Run the Services
+
+- **Terminal 1: Frontend (Root)**
+  ```bash
+  pnpm run dev
+  ```
+  Your Next.js app will be running at `http://localhost:3000`.
+
+- **Terminal 2: Backend**
+  ```bash
+  # In the /backend directory
+  pnpm run dev
+  ```
+  Your Node.js server will be running at `http://localhost:5001`.
+
+- **Terminal 3: AI Service**
+  ```bash
+  # In the /ai-service directory
+  uvicorn app.main:app --reload
+  ```
+  Your Python AI service will be running at `http://127.0.0.1:8000`.
+
+You should now have the full Miko application running locally!
+
+---
+
+## 📜 Aptos Smart Contract Deployment
+
+If you make changes to the Move modules in the `/move` directory, you need to republish them to the Aptos Devnet.
+
+1.  **Navigate to the `move` directory:**
+    ```bash
+    cd move
+    ```
+
+2.  **Compile the code (Optional):**
+    To ensure everything is correct before publishing, you can compile first.
+    ```bash
+    aptos move compile --named-addresses miko_admin=default
+    ```
+
+3.  **Publish to Devnet:**
+    This command publishes the compiled modules to the devnet using your `default` Aptos CLI profile. Make sure your `default` profile is funded with devnet APT.
+    ```powershell
+    aptos move publish --profile default --assume-yes --max-gas 600000
+    ```
+    After publishing, the CLI will output the new contract address. **You must update this address in your `.env` files (`MIKO_ADDRESS` and `NEXT_PUBLIC_MIKO_ADDRESS`).**
+
+4.  **Initialize On-Chain Resources:**
+    After a fresh publish, you must run these `init` functions to set up the on-chain state. Replace `0x...` with your new contract address.
+    ```powershell
+    # 1. Initialize Roles
+    aptos move run --function-id 0x...::roles::init --profile default --assume-yes
+
+    # 2. Initialize CCT Coin
+    aptos move run --function-id 0x...::cct::init --profile default --assume-yes
+
+    # 3. Initialize TreeNFT Collection
+    aptos move run --function-id 0x...::tree_nft::init --profile default --assume-yes
+
+    # 4. Initialize Tree Requests
+    aptos move run --function-id 0x...::tree_requests::init --profile default --assume-yes
+
+    # 5. Initialize Marketplace
+    aptos move run --function-id 0x...::marketplace::init --args u64:500 --profile default --assume-yes
+    ```
+
+---
+
+## 🔗 Using Ngrok for Razorpay Webhooks
+
+Razorpay needs a public URL to send webhook events (like `payment.captured`). During local development, you can use `ngrok` to expose your local backend server to the internet.
+
+1.  **Install [ngrok](https://ngrok.com/download).**
+
+2.  **Run ngrok:**
+    In a new terminal, run the following command to create a public tunnel to your local backend server on port `5001`.
+    ```bash
+    ngrok http 5001
+    ```
+
+3.  **Get the URL:**
+    Ngrok will give you a public `https` URL (e.g., `https://<random-string>.ngrok-free.app`).
+
+4.  **Update Razorpay Dashboard:**
+    - Go to your Razorpay Test Dashboard -> Settings -> Webhooks.
+    - Add a new webhook.
+    - Set the **Webhook URL** to `your_ngrok_url/api/payment-webhook` (e.g., `https://<random-string>.ngrok-free.app/api/payment-webhook`).
+    - Set the **Secret** to the `RAZORPAY_WEBHOOK_SECRET` you defined in your `backend/.env` file.
+    - Select the `payment.captured` event.
+
+Now, when you make a test payment with Razorpay, the webhook will be sent to your local backend server.
+
+---
+
+## 📂 Directory Structure
+
+```
+.
+├── ai-service/         # Python FastAPI service for AI checks
+├── backend/            # Node.js/Express.js backend server
+├── docs/               # Project documentation
+├── move/               # Aptos (Move) smart contracts
+├── public/             # Static assets for the frontend
+├── src/                # Next.js frontend source code
+│   ├── app/            # App router pages
+│   ├── components/     # React components (including WebGL scenes)
+│   ├── lib/            # Helper functions and libraries
+│   └── state/          # Global state management
+├── .env.local          # Frontend environment variables
+├── next.config.mjs     # Next.js configuration
+└── README.md           # This file
+```
 
 ### Theming
 Tokens use existing dark/light CSS variables; the modal avoids pure white (#FFF) in light mode—opting for elevated neutral surfaces to preserve depth against high‑key backgrounds. Emissive elements in the adjacent 3D crystal are reduced in light mode to keep focus on form elements.
