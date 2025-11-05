@@ -1,5 +1,4 @@
 <div align="center">
-  <img src="https://i.ibb.co/w8MN0rH/Black-Modern-Z-Letter-Logo-Design.png" alt="Miko Logo" width="150">
   <h1>Miko – Narrative Cascade</h1>
   <p><strong>Turn India's Green Cover into Digital Gold</strong></p>
   <p>Miko is a full-stack Web3 platform that tokenizes real-world ecological assets, starting with trees, into on-chain Carbon Credit Tokens (CCTs). It combines an immersive WebGL frontend with a robust backend infrastructure and Aptos smart contracts to create a transparent, verifiable, and engaging marketplace for environmental impact.</p>
